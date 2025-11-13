@@ -1,6 +1,5 @@
 import json
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "9"
 import torch
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -140,16 +139,17 @@ def verify_preload_with_dynamic_cache(
         model_name,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
-        attn_implementation="flash_attention_2",
+        # attn_implementation="flash_attention_2",
+        attn_implementation="sdpa",
         use_cache=True,
     )
-    model.cuda()
+    model.to("cuda:0")
     model.eval()
 
     for key, value in compression_config.items():
         setattr(model.config, key, value)
 
-    model.config.divide_method = "newline"
+    model.config.divide_method = "step_length" # newline is better actually 
     model.config.divide_length = 128
     model.config.compression_content = "all"
 
@@ -253,6 +253,9 @@ def verify_preload_with_dynamic_cache(
 
 
 if __name__ == "__main__":
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "9"
+
+
     import argparse
 
     parser = argparse.ArgumentParser()

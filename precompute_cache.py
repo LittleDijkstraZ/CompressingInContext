@@ -2,7 +2,6 @@
 import json
 import os
 from transformers.cache_utils import DynamicCache
-os.environ["CUDA_VISIBLE_DEVICES"] = "9"
 import random
 import shutil
 from pathlib import Path
@@ -23,55 +22,7 @@ from transformers import (
 from rkv.config import get_compression_config
 from rkv.monkeypatch import replace_llama, replace_qwen2, replace_qwen3
 
-HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-ATTN_IMPL = "flash_attention_2"
-HF_MAX_NEW_TOKENS = 1
-HF_TEMPERATURE = 0.6
-HF_TOP_P = 0.95
-HF_MAX_COMPLETIONS_PER_CALL = 1
 
-DEFAULT_METHOD = "rkv"
-METHOD_CONFIG = {
-    "budget": 32,
-    "window_size": 16,
-    "kernel_size": 7,
-    "mix_lambda": 0.07,
-    "retain_ratio": 0.1,
-    "retain_direction": "last",
-    "record_kept_token_indices": False,
-}
-
-HF_GENERATION_KWARGS = {
-    "max_new_tokens": HF_MAX_NEW_TOKENS,
-    "temperature": HF_TEMPERATURE,
-    "top_p": HF_TOP_P,
-    "do_sample": True,
-    "num_return_sequences": 1,
-    "return_dict_in_generate": True,
-    "output_scores": False,
-    "output_attentions": False,
-    "output_hidden_states": False,
-}
-
-PRECOMPUTED_DIR = Path("hf_precomputed_kv")
-PRECOMPUTED_DIR.mkdir(exist_ok=True)
-
-compression_config = get_compression_config()
-compression_config["method"] = DEFAULT_METHOD
-compression_config["method_config"].update(METHOD_CONFIG)
-
-if "documents" not in globals():
-    documents: List[str] = [
-        # """
-        # Acme Corp. quarterly report indicates a 12% year-over-year growth in cloud services. The CFO attributes success to aggressive regional expansion and a revamped partner program.
-        # """.strip(),
-        # """
-        # Technical design notes describe a retrieval-augmented generation pipeline. It highlights: (1) vector search over customer support tickets, (2) RAG responses cached for follow-up, and (3) a plan to migrate to vLLM for throughput. Key risks: stale ticket embeddings and missing observability.
-        # """.strip(),
-        """
-        Customer interview transcript: The buyer wants faster root-cause analysis in their observability stack and prefers integrations that do not require schema changes. They have a three-month decision window.
-        """.strip(),
-    ]
 
 
 class TqdmProgress(StoppingCriteria):
@@ -95,16 +46,13 @@ class TqdmProgress(StoppingCriteria):
         self.pbar.close()
 
 
-def build_document_prompt(doc_id: int, document: str, context: str = "") -> str:
+def build_document_prompt(doc_id: int, document: str, ) -> str:
     
     instruction = (
-        "You are processing a sequence of documents. "
-        "Summarize the current document in <=5 bullet points and flag notable risks."
+        "Summarize the current document in 1 sentence."
     )
     
     parts: List[str] = []
-    if context.strip():
-        parts.append(context.strip())
     parts.append(instruction)
     parts.extend([
         f"```document {doc_id}```",
@@ -178,8 +126,6 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
     return tokenizer, model, device
 
 
-set_seed()
-TOKENIZER, MODEL, DEVICE = _load_tokenizer_and_model()
 
 
 
@@ -304,83 +250,26 @@ def _append_context(context_prefix: str, doc_id: int, document: str, summary: st
     return "\n".join(part for part in parts if part).strip()
 
 
-def compute_iterative_cache(documents: List[str]) -> Dict[str, Any]:
-    metadata_path = PRECOMPUTED_DIR / "metadata.json"
-    if metadata_path.exists() and not os.getenv("RKV_RECOMPUTE_KV"):
-        with metadata_path.open("r") as fp:
-            return json.load(fp)
 
-    tokenizer = TOKENIZER
-    model = MODEL
-    device = DEVICE
+def apply_chat_template(input_text, model_name: str) -> str:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B':
+        bos = "<｜begin▁of▁sentence｜>"
+        user_token = "<｜User｜>"
+        assistant_token = "<｜Assistant｜>"
+    
+    else:
+        raise ValueError(f"Unsupported model for chat template: {model_name}")
+    
+    prompt = (
+        "You are trying learning to solve a certain type of math problems from some examples. "
+        "Given the problem, reasoning, and solution, you will try to learn how to solve such problems on your own, "
+        "writing down the key takeaways that can help you solve similar problems in the future. "
+    )
+    generation_prompt = f"""{bos}{user_token}{prompt}
+{assistant_token}{input_text}"""
+    return generation_prompt
 
-    summaries: List[str] = []
-    context_prefix = ""
-    layer_record: Dict[int, Dict[str, torch.Tensor]] = {}
-    token_records: Dict[int, List[int]] = {}
-    prefill_lengths: Dict[int, int] = {}
 
-    for doc_id, document in enumerate(tqdm(documents, desc="Precomputing HF KV"), start=1):
-        prompt = build_document_prompt(doc_id, document, context_prefix)
-        generation_prompt = tokenizer.apply_chat_template(
-			conversation =[{"role": "user", "content": prompt}],
-			tokenize=False,
-			add_generation_prompt=True, 
-			enable_thinking=True,
-    	)
-        inputs = tokenizer(generation_prompt, return_tensors="pt")
-        input_len = inputs["input_ids"].shape[-1]
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        print("input_len: ", input_len)
-
-        with ExitStack() as stack:
-            progress = TqdmProgress(total_steps=HF_MAX_NEW_TOKENS)
-            stack.callback(progress.close)
-            with torch.inference_mode():
-                generation = model.generate(
-                    **inputs,
-                    **HF_GENERATION_KWARGS,
-                    use_cache=True,
-                    stopping_criteria=StoppingCriteriaList([progress]),
-                )
-
-        past_key_values = getattr(generation, "past_key_values", None)
-        if past_key_values is None:
-            raise RuntimeError(
-                "Model.generate did not return past_key_values; ensure use_cache=True and return_dict_in_generate=True."
-            )
-
-        completion_slice = generation.sequences[:, input_len:].detach().cpu()
-        summary = tokenizer.decode(completion_slice[0], skip_special_tokens=True).strip()
-        summaries.append(summary)
-
-        layer_record = _collect_layer_tensors(past_key_values)
-        token_records[doc_id] = inputs["input_ids"][0, :input_len].detach().cpu().tolist()
-        context_prefix = _append_context(context_prefix, doc_id, document, summary)
-
-    if not layer_record:
-        raise RuntimeError("No KV tensors were captured during precomputation.")
-
-    kv_path = PRECOMPUTED_DIR / "combined_kv.pt"
-    torch.save(layer_record, kv_path)
-
-    first_entry = next(iter(layer_record.values()))
-    seq_len = int(first_entry["key"].shape[2])
-
-    metadata = {
-        "kv_path": str(kv_path.resolve()),
-        "seq_len": seq_len,
-        "documents": documents,
-        "summaries": summaries,
-        "context": context_prefix,
-        "context_token_ids": token_records,
-    }
-
-    with metadata_path.open("w") as fp:
-        json.dump(metadata, fp, indent=2)
-
-    print(f"Captured combined KV cache in {kv_path}.")
-    return metadata
 
 
 def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
@@ -396,19 +285,26 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     context_prefix = ""
     past_key_values_dict: Dict[int, DynamicCache] = {}
     token_records: Dict[int, List[int]] = {}
-    for doc_id, document in enumerate(tqdm(documents, desc="Precomputing HF KV"), start=1):
-        prompt = build_document_prompt(doc_id, document, context_prefix)
-        generation_prompt = tokenizer.apply_chat_template(
-			conversation =[{"role": "user", "content": prompt}],
-			tokenize=False,
-			add_generation_prompt=True, 
-			enable_thinking=True,
-    	)
-        inputs = tokenizer(generation_prompt, return_tensors="pt")
+    past_conversation = []
+    past_key_values =  DynamicCache()
+    past_context = ''
+
+    for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
+        
+        past_context += example + "\n###Takeaways:\n"
+        generation_prompt = apply_chat_template(
+            input_text = past_context,
+            model_name = HF_MODEL_ID,
+        )
+
+        print("=="*100)
+        print("History: \n", generation_prompt)
+        print("=="*100)
+
+
+        inputs = tokenizer(generation_prompt, return_tensors="pt").to(device)
         input_len = inputs["input_ids"].shape[-1]
-        token_records[doc_id] = inputs["input_ids"][0, :input_len].detach().cpu().tolist()
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        past_key_values =  DynamicCache()
+    
         with ExitStack() as stack:
             progress = TqdmProgress(total_steps=HF_MAX_NEW_TOKENS)
             stack.callback(progress.close)
@@ -417,26 +313,61 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
                     **inputs,
                     **HF_GENERATION_KWARGS,
                     use_cache=True,
+                    return_dict_in_generate=True,
                     stopping_criteria=StoppingCriteriaList([progress]),
+                    past_key_values=past_key_values,
                 )
 
                 past_key_values = generation.past_key_values
-                past_key_values_dict[doc_id] = past_key_values
-                # torch.save(past_key_values, "past_key_values_1.pt")    
+
+        # assume only one sequence
+        full_text_ids = generation.sequences[0, :].detach().cpu()
+
+        # truncate last token if it's eos_token. else, just leave it as a broken sentence.
+        last_token = full_text_ids[-1]
+        if last_token == tokenizer.eos_token_id:
+            full_text_ids = full_text_ids[:-1]
+            for layer_idx in range(len(past_key_values.key_cache)):
+                past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx][:, :, :-1, :]
+                past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx][:, :, :-1, :]
+
+        summary = tokenizer.decode(full_text_ids[input_len:], skip_special_tokens=True).strip()
+        raw = tokenizer.decode(full_text_ids[input_len:], skip_special_tokens=False)
+        print(f"raw length={len(raw)} vs summary length={len(summary)}")
+        print(f"Warning: raw!=summary") if raw != summary else None
+        print("=" * 100)
+        print(f"Generated summary: {summary}")
+        print(f"Generated summary raw: {raw}")
+        print("=" * 100)
+
+        print(f"cache_length= {past_key_values.get_seq_length()} vs full_text_ids_tokenized_len= {len(full_text_ids)}")
+
+        past_context += raw + "\n" # add a line switch at the end. the model will also encode this
+
+
     # Get sequence length from first cache
-    first_cache = next(iter(past_key_values_dict.values()))
-    seq_len = first_cache.get_seq_length() if hasattr(first_cache, 'get_seq_length') else first_cache.key_cache[0].shape[2]
+    cache_len = past_key_values.get_seq_length() 
+    print(f"cached seq_len: {cache_len}")
+    print(f"total_input_tokens: {input_len}")
+
+    past_key_values_dict[1] = past_key_values
     
     kv_path = PRECOMPUTED_DIR / "past_key_values_dict.pt"
     torch.save(past_key_values_dict, kv_path)
     print(f"Saved {len(past_key_values_dict)} document caches to {kv_path}")
-    
+
+    context_text = past_context
+    print("text to cache: ", context_text)
+    context_token_ids = tokenizer.encode(context_text)
+    print(f"Total context tokens to cache: {len(context_token_ids)}")
+    print(f"cache length=", cache_len)
+
     metadata = {
         "kv_path": str(kv_path.resolve()),
-        "seq_len": seq_len,
+        "seq_len": cache_len,
         "documents": documents,
         "summaries": summaries,
-        "context_token_ids": token_records,
+        "context_token_ids": context_token_ids,
     }
     
     # Save metadata to file (will overwrite existing metadata.json)
@@ -445,6 +376,65 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     
     print(f"Saved metadata to {metadata_path}")
     return metadata
-                
-# precomputed_metadata = compute_precomputed_kv(documents)
-dynamic_cache_metadata = compute_dynamic_cache(documents)
+
+
+if __name__ == "__main__":
+   
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "9"
+
+
+    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    # ATTN_IMPL = "flash_attention_2"
+    ATTN_IMPL = "sdpa"
+    HF_MAX_NEW_TOKENS = 64
+    HF_TEMPERATURE = 0.6
+    HF_TOP_P = 0.95
+    HF_MAX_COMPLETIONS_PER_CALL = 1
+
+    DEFAULT_METHOD = "rkv"
+    METHOD_CONFIG = {
+        "budget": 384,
+        "window_size": 128, # BUG: IDK why budget need to be > window_size here
+        "kernel_size": 7,
+        "mix_lambda": 0.1,
+        "retain_ratio": 0.75,
+        "retain_direction": "last",
+        "record_kept_token_indices": False,
+    }
+
+    HF_GENERATION_KWARGS = {
+        "max_new_tokens": HF_MAX_NEW_TOKENS,
+        "temperature": HF_TEMPERATURE,
+        "top_p": HF_TOP_P,
+        "do_sample": True,
+        "num_return_sequences": 1,
+        "output_scores": False,
+        "output_attentions": False,
+        "output_hidden_states": False,
+    }
+
+    PRECOMPUTED_DIR = Path("hf_precomputed_kv")
+    PRECOMPUTED_DIR.mkdir(exist_ok=True)
+
+    compression_config = get_compression_config()
+    compression_config["method"] = DEFAULT_METHOD
+    compression_config["method_config"].update(METHOD_CONFIG)
+
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "9"
+    set_seed()
+    TOKENIZER, MODEL, DEVICE = _load_tokenizer_and_model()
+    
+    import json 
+    with open('data.json', 'r') as f:
+        data = json.load(f)
+    documents = []
+    for item in data:
+        sample = f"""##Problem ID: {item['id']}
+###Problem:\n{item['problem']}\n
+###Reasoning:\n{item['reasoning']}\n
+###Solution:\n{item['solution']}\n"""
+        documents.append(sample.strip())
+
+
+    # precomputed_metadata = compute_precomputed_kv(documents)
+    dynamic_cache_metadata = compute_dynamic_cache(documents)
