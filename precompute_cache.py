@@ -256,17 +256,18 @@ def apply_chat_template(input_text, model_name: str) -> str:
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
+        think_end_think = "<think>\n</think>"
     
     else:
         raise ValueError(f"Unsupported model for chat template: {model_name}")
     
     prompt = (
-        "You are trying learning to solve a certain type of math problems from some examples. "
+        "You are currently learning from some examples, which will later help you to solve similar problems. "
         "Given the problem, reasoning, and solution, you will try to learn how to solve such problems on your own, "
-        "writing down the key takeaways that can help you solve similar problems in the future. "
+        "writing down the key takeaways (under the ###Takeaways section) that can help you solve similar problems in the future. Just writing down the key takeaways is fine."
     )
     generation_prompt = f"""{bos}{user_token}{prompt}
-{assistant_token}{input_text}"""
+{assistant_token}{think_end_think}{input_text}"""
     return generation_prompt
 
 
@@ -291,7 +292,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
     for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
         
-        past_context += example + "\n###Takeaways:\n"
+        past_context += example + "\n\n###Takeaways:\n"
         generation_prompt = apply_chat_template(
             input_text = past_context,
             model_name = HF_MODEL_ID,
@@ -384,8 +385,8 @@ if __name__ == "__main__":
 
 
     HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-    # ATTN_IMPL = "flash_attention_2"
-    ATTN_IMPL = "sdpa"
+    ATTN_IMPL = "flash_attention_2"
+    # ATTN_IMPL = "sdpa"
     HF_MAX_NEW_TOKENS = 64
     HF_TEMPERATURE = 0.6
     HF_TOP_P = 0.95
