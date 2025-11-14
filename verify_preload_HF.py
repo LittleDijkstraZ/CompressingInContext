@@ -139,8 +139,8 @@ def verify_preload_with_dynamic_cache(
         model_name,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
-        # attn_implementation="flash_attention_2",
-        attn_implementation="sdpa",
+        attn_implementation="flash_attention_2",
+        # attn_implementation="sdpa",
         use_cache=True,
     )
     model.to("cuda:0")
@@ -219,12 +219,20 @@ def verify_preload_with_dynamic_cache(
 
     past_key_values.set_seq_length(context_input_ids.size(1))
     print(f"Set past_key_values seq_len={past_key_values.get_seq_length()}")
+
+    cached_pos_ids = torch.arange(
+        0,
+        context_input_ids.size(1),
+        dtype=torch.long,
+        device=device
+    ).unsqueeze(0)
     with torch.inference_mode():
         outputs = model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             max_new_tokens=max_new_tokens,
+            cached_pos_ids=cached_pos_ids,
             temperature=0.1,
             top_p=0.95,
             do_sample=True,

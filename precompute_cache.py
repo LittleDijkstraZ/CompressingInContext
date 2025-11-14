@@ -256,7 +256,9 @@ def apply_chat_template(input_text, model_name: str) -> str:
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
-        think_end_think = "<think>\n</think>"
+        # think_end_think = "<think>\n</think>"
+        think_end_think = ""
+
     
     else:
         raise ValueError(f"Unsupported model for chat template: {model_name}")
@@ -293,17 +295,17 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
         
         past_context += example + "\n\n###Takeaways:\n"
-        generation_prompt = apply_chat_template(
+        input_text = apply_chat_template(
             input_text = past_context,
             model_name = HF_MODEL_ID,
         )
 
         print("=="*100)
-        print("History: \n", generation_prompt)
+        print("History: \n", input_text)
         print("=="*100)
 
 
-        inputs = tokenizer(generation_prompt, return_tensors="pt").to(device)
+        inputs = tokenizer(input_text, return_tensors="pt").to(device)
         input_len = inputs["input_ids"].shape[-1]
     
         with ExitStack() as stack:
@@ -320,6 +322,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
                 )
 
                 past_key_values = generation.past_key_values
+                print(f"cur cache size: {past_key_values.get_seq_length()}")
 
         # assume only one sequence
         full_text_ids = generation.sequences[0, :].detach().cpu()
@@ -357,9 +360,13 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     torch.save(past_key_values_dict, kv_path)
     print(f"Saved {len(past_key_values_dict)} document caches to {kv_path}")
 
-    context_text = past_context
-    print("text to cache: ", context_text)
-    context_token_ids = tokenizer.encode(context_text)
+    
+    input_text = apply_chat_template(
+        input_text = past_context,
+        model_name = HF_MODEL_ID,
+    )
+    print("text to cache: ", input_text)
+    context_token_ids = tokenizer.encode(input_text)
     print(f"Total context tokens to cache: {len(context_token_ids)}")
     print(f"cache length=", cache_len)
 
@@ -394,11 +401,11 @@ if __name__ == "__main__":
 
     DEFAULT_METHOD = "rkv"
     METHOD_CONFIG = {
-        "budget": 384,
-        "window_size": 128, # BUG: IDK why budget need to be > window_size here
+        "budget": 192,
+        "window_size": 64, # BUG: IDK why budget need to be > window_size here
         "kernel_size": 7,
-        "mix_lambda": 0.1,
-        "retain_ratio": 0.75,
+        "mix_lambda": 0.35,
+        "retain_ratio": 0.8,
         "retain_direction": "last",
         "record_kept_token_indices": False,
     }
@@ -420,6 +427,7 @@ if __name__ == "__main__":
     compression_config = get_compression_config()
     compression_config["method"] = DEFAULT_METHOD
     compression_config["method_config"].update(METHOD_CONFIG)
+    compression_config['divide_method'] = 'newline'
 
     # os.environ["CUDA_VISIBLE_DEVICES"] = "9"
     set_seed()

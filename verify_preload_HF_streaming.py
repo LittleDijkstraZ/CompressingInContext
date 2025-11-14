@@ -4,7 +4,6 @@ import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import torch
 
@@ -15,8 +14,6 @@ from transformers import (
     TextIteratorStreamer,
 )
 
-from rkv.config import get_compression_config
-from rkv.monkeypatch import replace_llama, replace_qwen2, replace_qwen3
 from utils import PatchedDynamicCache
 
 
@@ -109,29 +106,29 @@ def verify_preload_with_dynamic_cache_streaming(
     print(f"  Sequence length: {seq_len}")
     print(f"  Number of documents: {len(documents)}")
 
-    compression_config = get_compression_config()
-    compression_config["method"] = "rkv"
-    compression_config["method_config"].update(
-        {
-            "budget": 512,
-            "window_size": 256,
-            "kernel_size": 7,
-            "mix_lambda": 0.07,
-            "retain_ratio": 0.66,
-            "retain_direction": "last",
-            "record_kept_token_indices": False,
-        }
-    )
+    # compression_config = get_compression_config()
+    # compression_config["method"] = "rkv"
+    # compression_config["method_config"].update(
+    #     {
+    #         "budget": 512,
+    #         "window_size": 256,
+    #         "kernel_size": 7,
+    #         "mix_lambda": 0.07,
+    #         "retain_ratio": 0.66,
+    #         "retain_direction": "last",
+    #         "record_kept_token_indices": False,
+    #     }
+    # )
 
-    lower_name = model_name.lower()
-    if "llama" in lower_name:
-        replace_llama(compression_config)
-    elif "qwen3" in lower_name:
-        replace_qwen3(compression_config)
-    elif "qwen" in lower_name:
-        replace_qwen2(compression_config)
-    else:
-        raise ValueError(f"Unsupported model: {model_name}")
+    # lower_name = model_name.lower()
+    # if "llama" in lower_name:
+    #     replace_llama(compression_config)
+    # elif "qwen3" in lower_name:
+    #     replace_qwen3(compression_config)
+    # elif "qwen" in lower_name:
+    #     replace_qwen2(compression_config)
+    # else:
+    #     raise ValueError(f"Unsupported model: {model_name}")
 
     print(f"\nLoading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -148,30 +145,30 @@ def verify_preload_with_dynamic_cache_streaming(
         model_name,
         torch_dtype=torch.bfloat16,
         trust_remote_code=True,
-        attn_implementation="sdpa",
+        attn_implementation="flash_attention_2",
         use_cache=True,
     )
     model.to("cuda:0")
     model.eval()
 
-    for key, value in compression_config.items():
-        setattr(model.config, key, value)
+    # for key, value in compression_config.items():
+    #     setattr(model.config, key, value)
 
-    model.config.divide_method = "step_length"
-    model.config.divide_length = 128
-    model.config.compression_content = "all"
+    # model.config.divide_method = "step_length"
+    # model.config.divide_length = 128
+    # model.config.compression_content = "all"
 
-    newline_tokens = [
-        tokenizer.encode("\n", add_special_tokens=False),
-        tokenizer.encode(".\n", add_special_tokens=False),
-        tokenizer.encode(")\n", add_special_tokens=False),
-        tokenizer.encode("\n\n", add_special_tokens=False),
-        tokenizer.encode(".\n\n", add_special_tokens=False),
-        tokenizer.encode(")\n\n", add_special_tokens=False),
-    ]
-    model.newline_token_ids = [seq[-1] for seq in newline_tokens if len(seq) > 0]
-    think_token = tokenizer.encode("</think>", add_special_tokens=False)
-    model.after_think_token_ids = [think_token[-1]] if len(think_token) > 0 else []
+    # newline_tokens = [
+    #     tokenizer.encode("\n", add_special_tokens=False),
+    #     tokenizer.encode(".\n", add_special_tokens=False),
+    #     tokenizer.encode(")\n", add_special_tokens=False),
+    #     tokenizer.encode("\n\n", add_special_tokens=False),
+    #     tokenizer.encode(".\n\n", add_special_tokens=False),
+    #     tokenizer.encode(")\n\n", add_special_tokens=False),
+    # ]
+    # model.newline_token_ids = [seq[-1] for seq in newline_tokens if len(seq) > 0]
+    # think_token = tokenizer.encode("</think>", add_special_tokens=False)
+    # model.after_think_token_ids = [think_token[-1]] if len(think_token) > 0 else []
 
     past_key_values = load_precomputed_kv_as_dynamic_cache(
         kv_path=kv_path,
@@ -205,7 +202,7 @@ def verify_preload_with_dynamic_cache_streaming(
     follow_up_inputs = tokenizer(
         follow_up_prompt,
         return_tensors="pt",
-        add_special_tokens=True,
+        add_special_tokens=False,
     )
     follow_up_input_ids = follow_up_inputs["input_ids"].to(device)
     follow_up_attention_mask = follow_up_inputs["attention_mask"].to(device)
@@ -214,6 +211,7 @@ def verify_preload_with_dynamic_cache_streaming(
     attention_mask = torch.cat(
         [context_attention_mask, follow_up_attention_mask], dim=-1
     )
+    print(f"\nAttention mask sum: {attention_mask.sum().item()}")
 
     print(f"Context token shape: {context_input_ids.shape}")
     print(f"Follow-up token shape: {follow_up_input_ids.shape}")
@@ -223,8 +221,10 @@ def verify_preload_with_dynamic_cache_streaming(
     print(f"\nStreaming generation with past_key_values (max_new_tokens={max_new_tokens})...")
 
     past_key_values.set_seq_length(context_input_ids.size(1))
-    print(f"Set past_key_values seq_len={past_key_values.get_seq_length()}")
+    # past_key_values.set_seq_length(384)
 
+    cache_length = past_key_values.get_seq_length()  # Should be 2214
+    print(f"Set past_key_values seq_len={cache_length}")
     streamer = TextIteratorStreamer(
         tokenizer,
         skip_prompt=False,
@@ -235,12 +235,16 @@ def verify_preload_with_dynamic_cache_streaming(
         input_ids=input_ids,
         attention_mask=attention_mask,
         past_key_values=past_key_values,
+
+        # input_ids=follow_up_input_ids,
+        # attention_mask=follow_up_attention_mask,
+
         max_new_tokens=max_new_tokens,
-        temperature=0.1,
+        temperature=0.6,
         top_p=0.95,
         do_sample=True,
-        pad_token_id=tokenizer.pad_token_id,
-        eos_token_id=tokenizer.eos_token_id,
+        # pad_token_id=tokenizer.pad_token_id,
+        # eos_token_id=tokenizer.eos_token_id,
         use_cache=True,
         return_dict_in_generate=True,
         streamer=streamer,
@@ -270,16 +274,16 @@ def verify_preload_with_dynamic_cache_streaming(
         raise RuntimeError("Generation thread did not return outputs.")
 
     outputs = generation_output.sequences
-    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=False)
     response = tokenizer.decode(
-        outputs[0][input_ids.shape[1] :], skip_special_tokens=True
+        outputs[0][input_ids.shape[1] :], skip_special_tokens=False
     )
 
     print(f"\n{'=' * 80}")
     print("生成结果")
     print("=" * 80)
     print(f"\nFull output:\n{generated_text}")
-    print(f"\nResponse only:\n{response}")
+    # print(f"\nResponse only:\n{response}")
 
     return {
         "generated_text": generated_text,
@@ -303,17 +307,24 @@ def apply_chat_template(input_text, model_name: str) -> str:
         raise ValueError(f"Unsupported model for chat template: {model_name}")
 
     prompt = (
-        "now, can you solve this new problem using what you've learned, as well as your prior knowledge:\n"
+        "Now, can you solve this new problem using what you've learned, as well as your prior knowledge:\n"
         "here is the problem:\n"
+        "###Problem:\n"
+    )
+    prompt_after = (
+        "\nYou are going to reason about this problem within the <think>...</think> tags. And give the solution afterwards."
+        "\nPut your final answer within \\boxed{}."
     )
 
     generation_prompt = (
-        f"{eos_token}{bos}{user_token}{prompt}{input_text}\n{assistant_token}{think_token}"
+        f"{eos_token}{bos}{user_token}{prompt}{input_text}{prompt_after}\n{assistant_token}{think_token}"
     )
     return generation_prompt
 
 
 if __name__ == "__main__":
+    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -330,7 +341,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=512,
+        default=8192,
     )
     parser.add_argument(
         "--doc_id",
