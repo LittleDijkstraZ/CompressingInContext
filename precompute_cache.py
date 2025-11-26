@@ -336,6 +336,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
                 past_key_values.value_cache[layer_idx] = past_key_values.value_cache[layer_idx][:, :, :-1, :]
 
         summary = tokenizer.decode(full_text_ids[input_len:], skip_special_tokens=True).strip()
+        summaries.append(summary)
         raw = tokenizer.decode(full_text_ids[input_len:], skip_special_tokens=False)
         print(f"raw length={len(raw)} vs summary length={len(summary)}")
         print(f"Warning: raw!=summary") if raw != summary else None
@@ -394,14 +395,14 @@ if __name__ == "__main__":
     HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
-    HF_MAX_NEW_TOKENS = 64
+    HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
     HF_TEMPERATURE = 0.6
     HF_TOP_P = 0.95
     HF_MAX_COMPLETIONS_PER_CALL = 1
 
     DEFAULT_METHOD = "rkv"
     METHOD_CONFIG = {
-        "budget": 192,
+        "budget": int(os.getenv("budget", "192")),
         "window_size": 64, # BUG: IDK why budget need to be > window_size here
         "kernel_size": 7,
         "mix_lambda": 0.35,
@@ -421,7 +422,9 @@ if __name__ == "__main__":
         "output_hidden_states": False,
     }
 
-    PRECOMPUTED_DIR = Path("hf_precomputed_kv")
+    budget = METHOD_CONFIG['budget']
+    max_len = HF_MAX_NEW_TOKENS
+    PRECOMPUTED_DIR = Path(f"hf_precomputed_kv_budget_{budget}_maxlen_{max_len}")
     PRECOMPUTED_DIR.mkdir(exist_ok=True)
 
     compression_config = get_compression_config()

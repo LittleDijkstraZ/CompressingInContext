@@ -323,8 +323,6 @@ def apply_chat_template(input_text, model_name: str) -> str:
 
 
 if __name__ == "__main__":
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -336,7 +334,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--kv_cache_dir",
         type=str,
-        default="hf_precomputed_kv",
+        required=True,
     )
     parser.add_argument(
         "--max_new_tokens",
@@ -348,22 +346,71 @@ if __name__ == "__main__":
         type=int,
         default=None,
     )
+    parser.add_argument(
+        "--follow_up_prompt",
+        type=str,
+        default=None,
+        help="The follow-up prompt to use for generation."
+    )
+    import datetime
+    time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    parser.add_argument(
+        "--output_file",
+        type=str,
+        default=f'./raw_results_{time_stamp}.json',
+        help="File to save the results to."
+    )
+
+
 
     args = parser.parse_args()
 
-    follow_up_prompt = (
-        "On $\\triangle ABC$ points $A,D,E$, and $B$ lie that order on side $\\overline{AB}$ "
-        "with $AD=4, DE=16$, and $EB=8$. Points $A,F,G$, and $C$ lie in that order on side "
-        "$\\overline{AC}$ with $AF=13, FG=52$, and $GC=26$. Let $M$ be the reflection of $D$ "
-        "through $F$, and let $N$ be the reflection of $G$ through $E$. Quadrilateral $DEGF$ has "
-        "area 288. Find the area of heptagon $AFNBCEM$."
-    )
-    follow_up_prompt = apply_chat_template(follow_up_prompt, args.model_name)
-    verify_preload_with_dynamic_cache_streaming(
+    if args.follow_up_prompt is None:
+        args.follow_up_prompt = (
+            "On $\\triangle ABC$ points $A,D,E$, and $B$ lie that order on side $\\overline{AB}$ "
+            "with $AD=4, DE=16$, and $EB=8$. Points $A,F,G$, and $C$ lie in that order on side "
+            "$\\overline{AC}$ with $AF=13, FG=52$, and $GC=26$. Let $M$ be the reflection of $D$ "
+            "through $F$, and let $N$ be the reflection of $G$ through $E$. Quadrilateral $DEGF$ has "
+            "area 288. Find the area of heptagon $AFNBCEM$."
+        )
+
+    follow_up_prompt = apply_chat_template(args.follow_up_prompt, args.model_name)
+
+    results = verify_preload_with_dynamic_cache_streaming(
         model_name=args.model_name,
         kv_cache_dir=args.kv_cache_dir,
         follow_up_prompt=follow_up_prompt,
         max_new_tokens=args.max_new_tokens,
         doc_id=args.doc_id,
     )
+
+    # Save results
+    if args.output_file:
+        output_path = Path(args.output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w") as f:
+            json.dump(results, f, indent=2)
+        print(f"Results saved to {output_path}")
+    else:
+        # Fallback to old behavior if no output file is specified
+        results_dir = Path("results")
+        results_dir.mkdir(exist_ok=True)
+        
+        budget, max_len = None, None
+        try:
+            parts = args.kv_cache_dir.split('_')
+            budget = int(parts[4])
+            max_len = int(parts[6])
+        except (IndexError, ValueError):
+            pass
+
+        if budget is not None and max_len is not None:
+            result_filename = f"results_budget_{budget}_maxlen_{max_len}.json"
+        else:
+            result_filename = "results_default.json"
+            
+        result_path = results_dir / result_filename
+        with result_path.open("w") as f:
+            json.dump(results, f, indent=2)
+        print(f"Results saved to {result_path}")
 
