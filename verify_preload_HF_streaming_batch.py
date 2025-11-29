@@ -424,7 +424,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--repeat_time",
         type=int,
-        default=1,
+        default=8,
         help="Number of times to repeat the generation."
     )
     import datetime
@@ -432,8 +432,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_file",
         type=str,
-        default=f'./raw_results_{time_stamp}.json',
-        help="File to save the results to."
+        default=None,
+        help="File to save the results to. If not provided, results/ will be used."
     )
 
 
@@ -463,15 +463,8 @@ if __name__ == "__main__":
     # Save results
     if args.output_file:
         output_path = Path(args.output_file)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with output_path.open("w") as f:
-            json.dump(results, f, indent=2)
-        print(f"Results saved to {output_path}")
     else:
-        # Fallback to old behavior if no output file is specified
         results_dir = Path("results")
-        results_dir.mkdir(exist_ok=True)
-        
         budget, max_len = None, None
         try:
             parts = args.kv_cache_dir.split('_')
@@ -484,9 +477,11 @@ if __name__ == "__main__":
             result_filename = f"results_budget_{budget}_maxlen_{max_len}.json"
         else:
             result_filename = "results_default.json"
-            
-        result_path = results_dir / result_filename
-        with result_path.open("w") as f:
-            json.dump(results, f, indent=2)
-        print(f"Results saved to {result_path}")
+
+        output_path = results_dir / result_filename
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w") as f:
+        json.dump(results, f, indent=2)
+    print(f"Results saved to {output_path}")
 

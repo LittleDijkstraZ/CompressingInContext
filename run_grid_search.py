@@ -105,11 +105,12 @@ def run_verification(
     output_file = output_dir / output_filename
 
     command = [
-        'python', './verify_preload_HF_streaming.py',
+        'python', './verify_preload_HF_streaming_batch.py',
         '--model_name', model_name,
         '--kv_cache_dir', str(cache_dir),
         '--max_new_tokens', str(max_new_tokens),
         '--output_file', str(output_file),
+        '--repeat_time', '8',
     ]
 
     print(f"Running: {' '.join(command)}")
