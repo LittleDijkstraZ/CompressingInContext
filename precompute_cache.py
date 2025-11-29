@@ -46,6 +46,35 @@ class TqdmProgress(StoppingCriteria):
         self.pbar.close()
 
 
+class StopOnTokenSequence(StoppingCriteria):
+    """
+    Stops generation when any of the provided token sequences appears as a suffix.
+
+    Accepts either a single list[int] or a list of list[int].
+    """
+
+    def __init__(self, stop_sequences: List[List[int]] | List[int]):
+        if stop_sequences and isinstance(stop_sequences[0], int):
+            stop_sequences = [stop_sequences]  # type: ignore[list-item]
+        self.stop_tensors = [
+            torch.tensor(seq, dtype=torch.long) for seq in stop_sequences if seq
+        ]
+
+    def __call__(self, input_ids: torch.LongTensor, scores, **kwargs) -> bool:
+        if not self.stop_tensors:
+            return False
+
+        cur_len = input_ids.shape[-1]
+        for target in self.stop_tensors:
+            stop_len = target.shape[-1]
+            if cur_len < stop_len:
+                continue
+            last_tokens = input_ids[:, -stop_len:]
+            if (last_tokens == target.to(last_tokens.device)).all(dim=-1).any().item():
+                return True
+        return False
+
+
 def build_document_prompt(doc_id: int, document: str, ) -> str:
     
     instruction = (
@@ -257,7 +286,7 @@ def apply_chat_template(input_text, model_name: str) -> str:
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
         # think_end_think = "<think>\n</think>"
-        think_end_think = ""
+        think_end_think = "<think>\n"
 
     
     else:
@@ -266,8 +295,31 @@ def apply_chat_template(input_text, model_name: str) -> str:
     prompt = (
         "You are currently learning from some examples, which will later help you to solve similar problems. "
         "Given the problem, reasoning, and solution, you will try to learn how to solve such problems on your own, "
-        "writing down the key takeaways (under the ###Takeaways section) that can help you solve similar problems in the future. Just writing down the key takeaways is fine."
+        "writing down the key takeaways (under the ###Takeaways section) that can help you solve similar problems in the future. "
     )
+    Instruction_simple = (
+        "These takeaways should be bullet points. They should be highlevel, short and to the point."
+        "You should have 3 bullet points (i.e. 1., 2., 3.), following a markdown format."
+    )
+    # Instruction_medium = (
+    #     "These takeaways should be bullet points. "
+    #     "You should have 5 bullet points (i.e. 1., 2., 3., 4., 5.). "
+    #     "For each bullet point, you should have 2-3 sub-bullet points. (i.e. 1.1., 1.2., 1.3)"
+    # )
+    Instruction_complex = (
+        "These takeaways should be bullet points. "
+        "You should have 5 bullet points (i.e. 1., 2., 3., 4., 5.), following a markdown format. "
+        "Under each bullet point, write a detailed paragraph of 3-5 sentences mentioning the specific steps "
+        "and details in the reasoning process. It's good to include the formula or techniques "
+        "used in the reasoning process. "
+    )
+    if SUMMARY_COMPLEXTIY == "simple":
+        prompt += Instruction_simple
+    # elif SUMMARY_COMPLEXTIY == "medium":
+    #     prompt += Instruction_medium
+    elif SUMMARY_COMPLEXTIY == "complex":
+        prompt += Instruction_complex
+
     generation_prompt = f"""{bos}{user_token}{prompt}
 {assistant_token}{think_end_think}{input_text}"""
     return generation_prompt
@@ -292,6 +344,13 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     past_key_values =  DynamicCache()
     past_context = ''
 
+    stopping_tokens = ["</think>", "###", "##", '---', '\n\n6']
+    stop_sequences = [
+        tokenizer.encode(token, add_special_tokens=False) for token in stopping_tokens
+    ]
+    stop_sequences = [seq for seq in stop_sequences if seq]
+    stop_on_any_sequence = StopOnTokenSequence(stop_sequences) if stop_sequences else None
+
     for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
         
         past_context += example + "\n\n###Takeaways:\n"
@@ -311,13 +370,16 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         with ExitStack() as stack:
             progress = TqdmProgress(total_steps=HF_MAX_NEW_TOKENS)
             stack.callback(progress.close)
+            stopping_criteria = [progress]
+            if stop_on_any_sequence:
+                stopping_criteria.append(stop_on_any_sequence)
             with torch.inference_mode():
                 generation = model.generate(
                     **inputs,
                     **HF_GENERATION_KWARGS,
                     use_cache=True,
                     return_dict_in_generate=True,
-                    stopping_criteria=StoppingCriteriaList([progress]),
+                    stopping_criteria=StoppingCriteriaList(stopping_criteria),
                     past_key_values=past_key_values,
                 )
 
@@ -329,7 +391,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
         # truncate last token if it's eos_token. else, just leave it as a broken sentence.
         last_token = full_text_ids[-1]
-        if last_token == tokenizer.eos_token_id:
+        if last_token == tokenizer.eos_token_id or tokenizer.decode(last_token) in stopping_tokens:
             full_text_ids = full_text_ids[:-1]
             for layer_idx in range(len(past_key_values.key_cache)):
                 past_key_values.key_cache[layer_idx] = past_key_values.key_cache[layer_idx][:, :, :-1, :]
@@ -341,8 +403,8 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         print(f"raw length={len(raw)} vs summary length={len(summary)}")
         print(f"Warning: raw!=summary") if raw != summary else None
         print("=" * 100)
-        print(f"Generated summary: {summary}")
-        print(f"Generated summary raw: {raw}")
+        # print(f"Generated summary: {summary}")
+        # print(f"Generated summary raw: {raw}")
         print("=" * 100)
 
         print(f"cache_length= {past_key_values.get_seq_length()} vs full_text_ids_tokenized_len= {len(full_text_ids)}")
@@ -395,20 +457,23 @@ if __name__ == "__main__":
     HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
-    HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
-    HF_TEMPERATURE = 0.6
+    # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
+    HF_MAX_NEW_TOKENS = 2048
+    SUMMARY_COMPLEXTIY = os.getenv("SUMMARY_COMPLEXTIY", "complex")
+    HF_TEMPERATURE = 0.3
     HF_TOP_P = 0.95
     HF_MAX_COMPLETIONS_PER_CALL = 1
 
     DEFAULT_METHOD = "rkv"
     METHOD_CONFIG = {
-        "budget": int(os.getenv("budget", "192")),
-        "window_size": 64, # BUG: IDK why budget need to be > window_size here
+        "budget": int(os.getenv("budget", "1024")),
+        "window_size": 128, # BUG: IDK why budget need to be > window_size here
         "kernel_size": 7,
-        "mix_lambda": 0.35,
+        "mix_lambda": 0.1,
         "retain_ratio": 0.8,
         "retain_direction": "last",
         "record_kept_token_indices": False,
+        "initial_non_compressible_length": 160, # skip instructions
     }
 
     HF_GENERATION_KWARGS = {
@@ -424,16 +489,17 @@ if __name__ == "__main__":
 
     budget = METHOD_CONFIG['budget']
     max_len = HF_MAX_NEW_TOKENS
-    PRECOMPUTED_DIR = Path(f"hf_precomputed_kv_budget_{budget}_maxlen_{max_len}")
+    PRECOMPUTED_DIR = os.getenv("PRECOMPUTED_DIR", f"hf_precomputed_kv_budget_{budget}_comp_{SUMMARY_COMPLEXTIY}")
     
     # Check if cache already exists
-    metadata_path = PRECOMPUTED_DIR / "metadata.json"
-    if PRECOMPUTED_DIR.exists() and metadata_path.exists() and not os.getenv("RKV_RECOMPUTE_KV"):
+    metadata_path = Path(os.path.join(PRECOMPUTED_DIR, "metadata.json"))
+    if Path(PRECOMPUTED_DIR).exists() and metadata_path.exists() and not os.getenv("RKV_RECOMPUTE_KV"):
         print(f"Cache directory {PRECOMPUTED_DIR} already exists with metadata.json. Skipping precomputation.")
         with metadata_path.open("r") as fp:
             dynamic_cache_metadata = json.load(fp)
     else:
-        PRECOMPUTED_DIR.mkdir(exist_ok=True)
+        os.makedirs(PRECOMPUTED_DIR, exist_ok=True)
+        PRECOMPUTED_DIR = Path(PRECOMPUTED_DIR)
 
         compression_config = get_compression_config()
         compression_config["method"] = DEFAULT_METHOD

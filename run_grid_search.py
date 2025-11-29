@@ -11,7 +11,6 @@ Usage:
 """
 
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '8'
 import subprocess
 import argparse
 from pathlib import Path
@@ -38,10 +37,11 @@ def run_precomputation(budget: int, max_new_tokens: int) -> Path:
     env = os.environ.copy()
     env['HF_MAX_NEW_TOKENS'] = str(max_new_tokens)
     env['budget'] = str(budget)
-
+    PRECOMPUTED_DIR = f"cache/hf_precomputed_kv_budget_{budget}_maxlen_{max_new_tokens}"
+    env['PRECOMPUTED_DIR'] = PRECOMPUTED_DIR
     # Run precomputation
     result = subprocess.run(
-        ['python', './precompute_cache.py'],
+        ['python', './precompute_cache.py',],
         env=env,
         capture_output=False,
         text=True
@@ -52,8 +52,8 @@ def run_precomputation(budget: int, max_new_tokens: int) -> Path:
         return None
 
     # Expected cache directory name
-    cache_dir = Path(f"hf_precomputed_kv_budget_{budget}_maxlen_{max_new_tokens}")
-
+    cache_dir = Path(PRECOMPUTED_DIR)
+    
     if not cache_dir.exists():
         print(f"WARNING: Expected cache directory {cache_dir} not found")
         return None
@@ -110,7 +110,7 @@ def run_verification(
         '--kv_cache_dir', str(cache_dir),
         '--max_new_tokens', str(max_new_tokens),
         '--output_file', str(output_file),
-        '--repeat_time', '8',
+        '--repeat_time', '16',
     ]
 
     print(f"Running: {' '.join(command)}")
@@ -348,4 +348,6 @@ Examples:
 
 
 if __name__ == "__main__":
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '8'
+
     main()

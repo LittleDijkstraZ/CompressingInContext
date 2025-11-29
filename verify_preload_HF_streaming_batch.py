@@ -1,6 +1,5 @@
 import json
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '8'
 import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -371,6 +370,7 @@ def apply_chat_template(input_text, model_name: str) -> str:
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
         think_token = "<think>"
+        end_think_token = "</think>"
 
     else:
         raise ValueError(f"Unsupported model for chat template: {model_name}")
@@ -381,18 +381,21 @@ def apply_chat_template(input_text, model_name: str) -> str:
         "###Problem:\n"
     )
     prompt_after = (
-        "\nYou are going to reason about this problem within the <think>...</think> tags. And give the solution afterwards."
+        "\nYou are going to reason about this problem within the <think>...</think> tags, and output the final answer after </think>."
         "\nPut your final answer within \\boxed{}."
     )
 
     generation_prompt = (
-        f"{eos_token}{bos}{user_token}{prompt}{input_text}{prompt_after}\n{assistant_token}{think_token}"
+        f"{end_think_token}\nLearning has completed.{eos_token}"
+        f"{bos}{user_token}{prompt}{input_text}{prompt_after}\n{assistant_token}{think_token}"
     )
     return generation_prompt
 
 
 if __name__ == "__main__":
     import argparse
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '8'
+
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -424,7 +427,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--repeat_time",
         type=int,
-        default=8,
+        default=1,
         help="Number of times to repeat the generation."
     )
     import datetime
@@ -469,19 +472,19 @@ if __name__ == "__main__":
         try:
             parts = args.kv_cache_dir.split('_')
             budget = int(parts[4])
-            max_len = int(parts[6])
+            complexity = str(parts[6])
         except (IndexError, ValueError):
             pass
 
-        if budget is not None and max_len is not None:
-            result_filename = f"results_budget_{budget}_maxlen_{max_len}.json"
+        if budget is not None and complexity is not None:
+            result_filename = f"results_budget_{budget}_comp_{complexity}.json"
         else:
             result_filename = "results_default.json"
 
         output_path = results_dir / result_filename
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w") as f:
+    with output_path.open("w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
     print(f"Results saved to {output_path}")
 
