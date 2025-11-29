@@ -425,28 +425,35 @@ if __name__ == "__main__":
     budget = METHOD_CONFIG['budget']
     max_len = HF_MAX_NEW_TOKENS
     PRECOMPUTED_DIR = Path(f"hf_precomputed_kv_budget_{budget}_maxlen_{max_len}")
-    PRECOMPUTED_DIR.mkdir(exist_ok=True)
-
-    compression_config = get_compression_config()
-    compression_config["method"] = DEFAULT_METHOD
-    compression_config["method_config"].update(METHOD_CONFIG)
-    compression_config['divide_method'] = 'newline'
-
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "9"
-    set_seed()
-    TOKENIZER, MODEL, DEVICE = _load_tokenizer_and_model()
     
-    import json 
-    with open('data.json', 'r') as f:
-        data = json.load(f)
-    documents = []
-    for item in data:
-        sample = f"""##Problem ID: {item['id']}
+    # Check if cache already exists
+    metadata_path = PRECOMPUTED_DIR / "metadata.json"
+    if PRECOMPUTED_DIR.exists() and metadata_path.exists() and not os.getenv("RKV_RECOMPUTE_KV"):
+        print(f"Cache directory {PRECOMPUTED_DIR} already exists with metadata.json. Skipping precomputation.")
+        with metadata_path.open("r") as fp:
+            dynamic_cache_metadata = json.load(fp)
+    else:
+        PRECOMPUTED_DIR.mkdir(exist_ok=True)
+
+        compression_config = get_compression_config()
+        compression_config["method"] = DEFAULT_METHOD
+        compression_config["method_config"].update(METHOD_CONFIG)
+        compression_config['divide_method'] = 'newline'
+
+        set_seed()
+        TOKENIZER, MODEL, DEVICE = _load_tokenizer_and_model()
+        
+        import json 
+        with open('data.json', 'r') as f:
+            data = json.load(f)
+        documents = []
+        for item in data:
+            sample = f"""##Problem ID: {item['id']}
 ###Problem:\n{item['problem']}\n
 ###Reasoning:\n{item['reasoning']}\n
 ###Solution:\n{item['solution']}\n"""
-        documents.append(sample.strip())
+            documents.append(sample.strip())
 
 
-    # precomputed_metadata = compute_precomputed_kv(documents)
-    dynamic_cache_metadata = compute_dynamic_cache(documents)
+        # precomputed_metadata = compute_precomputed_kv(documents)
+        dynamic_cache_metadata = compute_dynamic_cache(documents)
