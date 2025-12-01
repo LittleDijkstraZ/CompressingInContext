@@ -237,11 +237,18 @@ def verify_preload_with_dynamic_cache_streaming(
 
     print(f"\nStreaming generation with past_key_values (max_new_tokens={max_new_tokens}, repeat_time={repeat_time})...")
 
-    past_key_values.set_seq_length(context_input_ids.size(1))
-    # past_key_values.set_seq_length(384)
+    # Use the seq_len from metadata, which accounts for rotation
+    # This is the actual next token position, not just the number of tokens
+    if seq_len is not None:
+        past_key_values.set_seq_length(seq_len)
+        print(f"Set past_key_values seq_len={seq_len} (from metadata)")
+    else:
+        # Fallback: use context token count (only correct without rotation)
+        past_key_values.set_seq_length(context_input_ids.size(1))
+        print(f"Set past_key_values seq_len={context_input_ids.size(1)} (fallback)")
 
-    cache_length = past_key_values.get_seq_length()  # Should be 2214
-    print(f"Set past_key_values seq_len={cache_length}")
+    cache_length = past_key_values.get_seq_length()
+    print(f"Actual cache seq_len: {cache_length}")
 
     # Repeat input_ids and attention_mask along batch dimension
     # Original shape: (1, seq_len) -> (repeat_time, seq_len)
@@ -256,7 +263,12 @@ def verify_preload_with_dynamic_cache_streaming(
         key = past_key_values.key_cache[layer_idx].repeat(repeat_time, 1, 1, 1)
         value = past_key_values.value_cache[layer_idx].repeat(repeat_time, 1, 1, 1)
         past_key_values_batched.update(key, value, layer_idx)
-    past_key_values_batched.set_seq_length(context_input_ids.size(1))
+
+    # Use the same seq_len as the non-batched cache
+    if seq_len is not None:
+        past_key_values_batched.set_seq_length(seq_len)
+    else:
+        past_key_values_batched.set_seq_length(context_input_ids.size(1))
 
     print(f"Batched input_ids shape: {input_ids_batched.shape}")
     print(f"Batched attention_mask shape: {attention_mask_batched.shape}")

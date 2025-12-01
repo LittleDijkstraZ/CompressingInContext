@@ -11,6 +11,30 @@ try:
 except: # compatibility with python < 3.12
 	from typing_extensions import override, Optional
 
+
+def get_next_token_position_from_model(model: AutoModelForCausalLM) -> Optional[int]:
+	"""
+	Get the next token position from the R1KV compressor in the model.
+
+	This is important when using key rotation, as the next token position
+	is not simply the number of tokens seen, but rather the actual position
+	in the rotated buffer.
+
+	Args:
+		model: The model with R1KV compression enabled
+
+	Returns:
+		int: The position for the next token, or None if not available
+	"""
+	# Check if the model has layers with kv_cluster (R1KV compressor)
+	if hasattr(model, 'model') and hasattr(model.model, 'layers'):
+		first_layer = model.model.layers[0]
+		if hasattr(first_layer, 'self_attn') and hasattr(first_layer.self_attn, 'kv_cluster'):
+			kv_cluster = first_layer.self_attn.kv_cluster
+			if hasattr(kv_cluster, 'get_next_token_position'):
+				return kv_cluster.get_next_token_position()
+	return None
+
 class PatchedDynamicCache(DynamicCache):
 	def __init__(self):
 		super().__init__()

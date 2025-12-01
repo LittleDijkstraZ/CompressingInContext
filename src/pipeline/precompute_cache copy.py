@@ -138,7 +138,9 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
     for key, value in compression_config.items():
         setattr(model.config, key, value)
 
-    newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
+    # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
+    # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
+    newline_candidates = ["---", ]
     newline_token_ids: List[int] = []
     for pattern in newline_candidates:
         ids = tokenizer.encode(pattern, add_special_tokens=False)
@@ -286,7 +288,7 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
         # think_end_think = "<think>\n</think>"
-        think_end_think = "<think>\n"
+        think_end_think = "<think>\nOkey, my learning begins:"
 
     
     else:
@@ -304,7 +306,7 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
 
     Instruction_simple = (
         "These takeaways should be bullet points. They should be highlevel, short and to the point."
-        "We should have 3 bullet points (i.e. 1., 2., 3.), following a markdown format.)\n1."
+        "We should have 3 bullet points (i.e. 1., 2., 3.), following a markdown format. I will end the takeaways with the '---' token underneath the last point.)\n1."
     )
     # Instruction_medium = (
     #     "These takeaways should be bullet points. "
@@ -316,7 +318,7 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
         "We should have 5 bullet points (i.e. 1., 2., 3., 4., 5.), following a markdown format. "
         "Under each bullet point, write a detailed paragraph of 3-5 sentences mentioning the specific steps "
         "and details in the reasoning process. It's good to include the formula or techniques "
-        "used in the reasoning process.)\n1."
+        "used in the reasoning process. I will end the takeaways with '---' token underneath the last point.)\n1."
     )
     if SUMMARY_COMPLEXTIY == "simple":
         # prompt += Instruction_simple
@@ -353,7 +355,9 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     past_key_values =  DynamicCache()
     past_context = ''
 
-    stopping_tokens = ["</think>", "###", "##", '---', '\n\n6', '.\n\n6']
+    # stopping_tokens = ["</think>", "###", "##", '---', '\n\n6', '.\n\n6']
+    stopping_tokens = ["</think>", "###", "##", '\n\n6', '.\n\n6']
+
     stop_sequences = [
         tokenizer.encode(token, add_special_tokens=False) for token in stopping_tokens
     ]
@@ -470,6 +474,8 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Precompute KV cache for documents")
+    parser.add_argument("--data_path", type=str, required=True,
+                        help="Path to the data file")
     parser.add_argument("--budget", type=int, default=1024+128+160, help="KV cache budget size")
     parser.add_argument("--summary_complexity", type=str, default="complex",
                         choices=["simple", "complex"], help="Summary complexity level")
@@ -479,6 +485,7 @@ def parse_args():
                         help="Directory to save precomputed cache (auto-generated if not specified)")
     parser.add_argument("--recompute", action="store_true",
                         help="Force recomputation even if cache exists")
+    
     return parser.parse_args()
 
 
@@ -508,6 +515,10 @@ if __name__ == "__main__":
         "retain_direction": "last",
         "record_kept_token_indices": False,
         "initial_non_compressible_length": 160, # skip instructions
+        # Memory optimization parameters to avoid OOM
+        "similarity_chunk_size": 512,  # Reduce from 1024 to be more conservative
+        "use_random_projection": False,  # Set to True if still OOM
+        "projection_dim": 128,  # Only used if use_random_projection=True
     }
 
     HF_GENERATION_KWARGS = {
@@ -547,21 +558,43 @@ if __name__ == "__main__":
         compression_config["method_config"].update(METHOD_CONFIG)
         compression_config['divide_method'] = 'newline'
 
+        compression_config = {
+            "method": DEFAULT_METHOD,
+            "method_config": METHOD_CONFIG,
+            "compression": None,
+            "update_kv": True,
+            "compression_content": "all",
+            "divide_method": "newline",
+            "divide_length": 128,
+        }
+
+
         set_seed()
         TOKENIZER, MODEL, DEVICE = _load_tokenizer_and_model()
 
         import json
-        with open('data.json', 'r') as f:
+        with open(args.data_path, 'r') as f:
             data = json.load(f)
 
         documents = []
-        for item in data:
+        for idx, item in enumerate(data):
             sample = (
-                f"##Problem ID: {item['id']}\n"
-                f"###Problem:\n{item['problem']}\n"
-                f"###Reasoning:\n{item['reasoning']}\n"
-                f"###Solution:\n{item['solution']}\n"
+                f"---\n"
+                f"###Problem:\n{item['question']}\n"
+                f"###Reasoning:\n<think>\n{item['solution']}\n</think>\n"
+                f"###Solution:\n{item['answer']}\n"
             )
+            # sample = (
+            #     f"---\n"
+            #     f"###Problem:\n{item['problem']}\n"
+            #     f"###Reasoning:\n<think>\n{item['reasoning']}\n</think>\n"
+            #     f"###Solution:\n{item['solution']}\n"
+            # )
+            sample_len = len(TOKENIZER(sample).input_ids)
+            if sample_len > 12000:
+                print(f"Sample {idx} is too long: {sample_len} tokens. Skipping.")
+                continue
+
             documents.append(sample.strip())
 
         # Repeat documents num_epochs times

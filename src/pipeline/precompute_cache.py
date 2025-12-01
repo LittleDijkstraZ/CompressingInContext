@@ -138,7 +138,9 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
     for key, value in compression_config.items():
         setattr(model.config, key, value)
 
-    newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
+    # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
+    # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
+    newline_candidates = ["---", ]
     newline_token_ids: List[int] = []
     for pattern in newline_candidates:
         ids = tokenizer.encode(pattern, add_special_tokens=False)
@@ -304,7 +306,7 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
 
     Instruction_simple = (
         "These takeaways should be bullet points. They should be highlevel, short and to the point."
-        "We should have 3 bullet points (i.e. 1., 2., 3.), following a markdown format.)\n1."
+        "We should have 3 bullet points (i.e. 1., 2., 3.), following a markdown format. I will end the takeaways with the '---' token underneath the last point.)\n1."
     )
     # Instruction_medium = (
     #     "These takeaways should be bullet points. "
@@ -316,7 +318,7 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
         "We should have 5 bullet points (i.e. 1., 2., 3., 4., 5.), following a markdown format. "
         "Under each bullet point, write a detailed paragraph of 3-5 sentences mentioning the specific steps "
         "and details in the reasoning process. It's good to include the formula or techniques "
-        "used in the reasoning process.)\n1."
+        "used in the reasoning process. I will end the takeaways with '---' token underneath the last point.)\n1."
     )
     if SUMMARY_COMPLEXTIY == "simple":
         # prompt += Instruction_simple
@@ -353,7 +355,9 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     past_key_values =  DynamicCache()
     past_context = ''
 
-    stopping_tokens = ["</think>", "###", "##", '---', '\n\n6', '.\n\n6']
+    # stopping_tokens = ["</think>", "###", "##", '---', '\n\n6', '.\n\n6']
+    stopping_tokens = ["</think>", "###", "##", '\n\n6', '.\n\n6']
+
     stop_sequences = [
         tokenizer.encode(token, add_special_tokens=False) for token in stopping_tokens
     ]
@@ -430,17 +434,29 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
 
     # Get sequence length from first cache
-    cache_len = past_key_values.get_seq_length() 
-    print(f"cached seq_len: {cache_len}")
+    cache_len = past_key_values.get_seq_length()
+    print(f"cached seq_len (buffer size): {cache_len}")
     print(f"total_input_tokens: {input_len}")
 
+    # Get the actual next token position from the R1KV compressor
+    # This is critical when rotation is enabled!
+    from CompressingInContext.src.pipeline.utils import get_next_token_position_from_model
+    next_token_position = get_next_token_position_from_model(MODEL)
+
+    if next_token_position is not None:
+        print(f"Next token position (from R1KV tracker): {next_token_position}")
+        actual_seq_len = next_token_position
+    else:
+        print(f"Next token position (fallback): {cache_len}")
+        actual_seq_len = cache_len
+
     past_key_values_dict[1] = past_key_values
-    
+
     kv_path = PRECOMPUTED_DIR / "past_key_values_dict.pt"
     torch.save(past_key_values_dict, kv_path)
     print(f"Saved {len(past_key_values_dict)} document caches to {kv_path}")
 
-    
+
     input_text, _ = apply_chat_template(
         input_text = past_context,
         model_name = HF_MODEL_ID,
@@ -454,7 +470,11 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
     metadata = {
         "kv_path": str(kv_path.resolve()),
-        "seq_len": cache_len,
+        "seq_len": actual_seq_len,  # Use the actual next token position
+        "buffer_size": cache_len,  # Also save the buffer size for reference
+        "rotation_enabled": METHOD_CONFIG.get("rotate_keys", False),
+        "rotation_offset": METHOD_CONFIG.get("rotation_offset", 0),
+        "initial_non_compressible_length": METHOD_CONFIG.get("initial_non_compressible_length", 0),
         "documents": documents,
         "summaries": summaries,
         "context_token_ids": context_token_ids,
@@ -515,6 +535,8 @@ if __name__ == "__main__":
         "similarity_chunk_size": 512,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
+        "rotate_keys": True,
+        "rotation_offset": 512,
     }
 
     HF_GENERATION_KWARGS = {
@@ -554,6 +576,17 @@ if __name__ == "__main__":
         compression_config["method_config"].update(METHOD_CONFIG)
         compression_config['divide_method'] = 'newline'
 
+        compression_config = {
+            "method": DEFAULT_METHOD,
+            "method_config": METHOD_CONFIG,
+            "compression": None,
+            "update_kv": True,
+            "compression_content": "all",
+            "divide_method": "newline",
+            "divide_length": 128,
+        }
+
+
         set_seed()
         TOKENIZER, MODEL, DEVICE = _load_tokenizer_and_model()
 
@@ -569,6 +602,12 @@ if __name__ == "__main__":
                 f"###Reasoning:\n<think>\n{item['solution']}\n</think>\n"
                 f"###Solution:\n{item['answer']}\n"
             )
+            # sample = (
+            #     f"---\n"
+            #     f"###Problem:\n{item['problem']}\n"
+            #     f"###Reasoning:\n<think>\n{item['reasoning']}\n</think>\n"
+            #     f"###Solution:\n{item['solution']}\n"
+            # )
             sample_len = len(TOKENIZER(sample).input_ids)
             if sample_len > 12000:
                 print(f"Sample {idx} is too long: {sample_len} tokens. Skipping.")
