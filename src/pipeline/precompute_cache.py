@@ -48,31 +48,83 @@ class TqdmProgress(StoppingCriteria):
 
 class StopOnTokenSequence(StoppingCriteria):
     """
-    Stops generation when any of the provided token sequences appears as a suffix.
+    Stops generation when any provided stop sequence appears as a decoded suffix,
+    optionally after a delay of `delay_tokens` tokens.
 
-    Accepts either a single list[int] or a list of list[int].
+    Accepts raw strings or token id sequences (single list[int] or list of list[int]).
     """
 
-    def __init__(self, stop_sequences: List[List[int]] | List[int]):
+    def __init__(self, stop_sequences: List[List[int]] | List[int] | List[str], tokenizer: AutoTokenizer, delay_tokens: int = 0):
         if stop_sequences and isinstance(stop_sequences[0], int):
             stop_sequences = [stop_sequences]  # type: ignore[list-item]
-        self.stop_tensors = [
-            torch.tensor(seq, dtype=torch.long) for seq in stop_sequences if seq
-        ]
+
+        self.tokenizer = tokenizer
+        self.stop_strings: List[str] = []
+        self.stop_strings_stripped: List[str] = []
+        self.max_window_tokens = 0
+        self.delay_tokens = max(0, delay_tokens)
+        self._first_match_len: int | None = None
+
+        for seq in stop_sequences:
+            if not seq:
+                continue
+            if isinstance(seq, str):
+                stop_text = seq
+                token_ids = tokenizer.encode(stop_text, add_special_tokens=False)
+            else:
+                token_ids = list(seq)
+                stop_text = tokenizer.decode(
+                    token_ids,
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+            if not token_ids:
+                continue
+            self.stop_strings.append(stop_text)
+            stripped = stop_text.rstrip()
+            if stripped:
+                self.stop_strings_stripped.append(stripped)
+            self.max_window_tokens = max(self.max_window_tokens, len(token_ids))
+
+        self.stop_suffixes = tuple(self.stop_strings)
+        self.stop_suffixes_stripped = tuple(self.stop_strings_stripped)
+
+    def _matched(self, text: str) -> bool:
+        if text.endswith(self.stop_suffixes):
+            return True
+        stripped = text.rstrip()
+        if stripped and stripped.endswith(self.stop_suffixes_stripped):
+            return True
+        return False
 
     def __call__(self, input_ids: torch.LongTensor, scores, **kwargs) -> bool:
-        if not self.stop_tensors:
+        if not self.stop_suffixes or self.max_window_tokens == 0:
             return False
 
         cur_len = input_ids.shape[-1]
-        for target in self.stop_tensors:
-            stop_len = target.shape[-1]
-            if cur_len < stop_len:
-                continue
-            last_tokens = input_ids[:, -stop_len:]
-            if (last_tokens == target.to(last_tokens.device)).all(dim=-1).any().item():
-                return True
-        return False
+        if cur_len == 0:
+            return False
+
+        window = min(cur_len, self.max_window_tokens)
+        last_tokens = input_ids[:, -window:]
+
+        decoded_suffixes = self.tokenizer.batch_decode(
+            last_tokens.tolist(),
+            skip_special_tokens=False,
+            clean_up_tokenization_spaces=False,
+        )
+        saw_match = any(self._matched(text) for text in decoded_suffixes)
+
+        if saw_match and self._first_match_len is None:
+            self._first_match_len = cur_len
+
+        if self._first_match_len is None:
+            return False
+
+        if self.delay_tokens == 0:
+            return True
+
+        return (cur_len - self._first_match_len) >= self.delay_tokens
 
 
 def build_document_prompt(doc_id: int, document: str, ) -> str:
@@ -140,13 +192,22 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
 
     # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
     # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
-    newline_candidates = ["---", ]
+    # newline_candidates = ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
+    newline_candidates = ['---', '---\n', '---\n\n', ]
+
     newline_token_ids: List[int] = []
+    newline_strings: List[str] = []
+    newline_max_len = 1
     for pattern in newline_candidates:
         ids = tokenizer.encode(pattern, add_special_tokens=False)
         if ids:
             newline_token_ids.append(ids[-1])
+            newline_strings.append(pattern)
+            newline_max_len = max(newline_max_len, len(ids))
     model.newline_token_ids = newline_token_ids
+    model._newline_tokenizer = tokenizer
+    model._newline_strings = newline_strings
+    model._newline_max_len = newline_max_len
 
     think_ids = tokenizer.encode("</think>", add_special_tokens=False)
     model.after_think_token_ids = [think_ids[-1]] if think_ids else []
@@ -358,12 +419,15 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     # stopping_tokens = ["</think>", "###", "##", '---', '\n\n6', '.\n\n6']
     # stopping_tokens = ["</think>", "###", "##", '\n\n6', '.\n\n6']
 
-    stopping_tokens = ['---']
+    # stopping_tokens = ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', '\n---\n\n']
+    # stopping_tokens =  ['\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
+    stopping_tokens =  ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
+
     stop_sequences = [
-        tokenizer.encode(token, add_special_tokens=False)[-1] for token in stopping_tokens
+        tokenizer.encode(token, add_special_tokens=False) for token in stopping_tokens
     ]
 
-    stop_on_any_sequence = StopOnTokenSequence(stop_sequences) if stop_sequences else None
+    stop_on_any_sequence = StopOnTokenSequence(stop_sequences, tokenizer, delay_tokens=1) if stop_sequences else None
 
     for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
         
@@ -597,19 +661,18 @@ if __name__ == "__main__":
 
         documents = []
         for idx, item in enumerate(data):
-            sample = (
-                f"\n---\n"
-                f"###Problem:\n{item['question']}\n"
-                f"###Reasoning:\n<think>\n{item['solution']}\n</think>\n"
-                f"###Solution:\n{item['answer']}\n"
-            )
             # sample = (
-            #     f"\n---\n"
-            #     f"###Problem:\n{item['problem']}\n"
-            #     f"###Reasoning:\n<think>\n{item['reasoning']}\n</think>\n"
-            #     f"###Solution:\n{item['solution']}\n"
-
+            #     f"\n\n---\n\n"
+            #     f"###Problem:\n{item['question']}\n\n"
+            #     f"###Reasoning:\n<think>\n{item['solution']}\n</think>\n\n"
+            #     f"###Solution:\n{item['answer']}\n\n"
             # )
+            sample = (
+                f"\n---\n\n"
+                f"###Problem:\n{item['problem']}\n\n"
+                f"###Reasoning:\n<think>\n{item['reasoning']}\n</think>\n\n"
+                f"###Solution:\n{item['solution']}\n\n"
+            )
             sample_len = len(TOKENIZER(sample).input_ids)
             if sample_len > 12000:
                 print(f"Sample {idx} is too long: {sample_len} tokens. Skipping.")
