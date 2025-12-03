@@ -59,6 +59,7 @@ class StopOnTokenSequence(StoppingCriteria):
             stop_sequences = [stop_sequences]  # type: ignore[list-item]
 
         self.tokenizer = tokenizer
+        self._base_len: int | None = None
         self.stop_strings: List[str] = []
         self.stop_strings_stripped: List[str] = []
         self.max_window_tokens = 0
@@ -89,6 +90,11 @@ class StopOnTokenSequence(StoppingCriteria):
         self.stop_suffixes = tuple(self.stop_strings)
         self.stop_suffixes_stripped = tuple(self.stop_strings_stripped)
 
+    def reset(self, start_len: int | None = None):
+        """Reset internal counters for a new generation call."""
+        self._first_match_len = None
+        self._base_len = start_len if start_len is not None else 0
+
     def _matched(self, text: str) -> bool:
         if text.endswith(self.stop_suffixes):
             return True
@@ -102,6 +108,12 @@ class StopOnTokenSequence(StoppingCriteria):
             return False
 
         cur_len = input_ids.shape[-1]
+        if self._base_len is None:
+            # Fallback: initialize on first call if reset wasn't invoked.
+            self._base_len = cur_len
+        if cur_len <= (self._base_len or 0):
+            return False
+
         if cur_len == 0:
             return False
 
@@ -114,6 +126,24 @@ class StopOnTokenSequence(StoppingCriteria):
             clean_up_tokenization_spaces=False,
         )
         saw_match = any(self._matched(text) for text in decoded_suffixes)
+
+        if not saw_match:
+            # Fallback: decode a slightly longer tail to catch matches that slip past the minimal window.
+            extra_window = min(
+                cur_len,
+                max(self.max_window_tokens + self.delay_tokens + 8, self.max_window_tokens * 2, 32),
+            )
+            if extra_window > window:
+                longer_tokens = input_ids[:, -extra_window:]
+                longer_decoded = self.tokenizer.batch_decode(
+                    longer_tokens.tolist(),
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+                for text in longer_decoded:
+                    if self._matched(text) or self._matched(text.rstrip()):
+                        saw_match = True
+                        break
 
         if saw_match and self._first_match_len is None:
             self._first_match_len = cur_len
@@ -421,7 +451,9 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
     # stopping_tokens = ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', '\n---\n\n']
     # stopping_tokens =  ['\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
-    stopping_tokens =  ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
+    # stopping_tokens =  ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
+    stopping_tokens =  ['---', ]
+
 
     stop_sequences = [
         tokenizer.encode(token, add_special_tokens=False) for token in stopping_tokens
@@ -450,6 +482,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
             stack.callback(progress.close)
             stopping_criteria = [progress]
             if stop_on_any_sequence:
+                stop_on_any_sequence.reset(start_len=input_len)
                 stopping_criteria.append(stop_on_any_sequence)
             with torch.inference_mode():
                 generation = model.generate(
