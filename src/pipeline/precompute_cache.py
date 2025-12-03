@@ -356,12 +356,13 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     past_context = ''
 
     # stopping_tokens = ["</think>", "###", "##", '---', '\n\n6', '.\n\n6']
-    stopping_tokens = ["</think>", "###", "##", '\n\n6', '.\n\n6']
+    # stopping_tokens = ["</think>", "###", "##", '\n\n6', '.\n\n6']
 
+    stopping_tokens = ['---']
     stop_sequences = [
-        tokenizer.encode(token, add_special_tokens=False) for token in stopping_tokens
+        tokenizer.encode(token, add_special_tokens=False)[-1] for token in stopping_tokens
     ]
-    stop_sequences = [seq for seq in stop_sequences if seq]
+
     stop_on_any_sequence = StopOnTokenSequence(stop_sequences) if stop_sequences else None
 
     for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
@@ -440,7 +441,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
     # Get the actual next token position from the R1KV compressor
     # This is critical when rotation is enabled!
-    from CompressingInContext.src.pipeline.utils import get_next_token_position_from_model
+    from .utils import get_next_token_position_from_model
     next_token_position = get_next_token_position_from_model(MODEL)
 
     if next_token_position is not None:
@@ -535,7 +536,7 @@ if __name__ == "__main__":
         "similarity_chunk_size": 512,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
-        "rotate_keys": True,
+        "rotate_keys": False,
         "rotation_offset": 512,
     }
 
@@ -573,8 +574,8 @@ if __name__ == "__main__":
 
         compression_config = get_compression_config()
         compression_config["method"] = DEFAULT_METHOD
-        compression_config["method_config"].update(METHOD_CONFIG)
-        compression_config['divide_method'] = 'newline'
+        # compression_config["method_config"].update(METHOD_CONFIG)
+        # compression_config['divide_method'] = 'newline'
 
         compression_config = {
             "method": DEFAULT_METHOD,
@@ -597,16 +598,17 @@ if __name__ == "__main__":
         documents = []
         for idx, item in enumerate(data):
             sample = (
-                f"---\n"
+                f"\n---\n"
                 f"###Problem:\n{item['question']}\n"
                 f"###Reasoning:\n<think>\n{item['solution']}\n</think>\n"
                 f"###Solution:\n{item['answer']}\n"
             )
             # sample = (
-            #     f"---\n"
+            #     f"\n---\n"
             #     f"###Problem:\n{item['problem']}\n"
             #     f"###Reasoning:\n<think>\n{item['reasoning']}\n</think>\n"
             #     f"###Solution:\n{item['solution']}\n"
+
             # )
             sample_len = len(TOKENIZER(sample).input_ids)
             if sample_len > 12000:
