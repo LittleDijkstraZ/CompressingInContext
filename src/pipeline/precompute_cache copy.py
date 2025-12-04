@@ -101,7 +101,7 @@ def set_seed(seed: int = 42) -> None:
     torch.backends.cudnn.deterministic = True
 
 
-def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, torch.device]:
+def _load_tokenizer_and_model(compression_config) -> tuple[AutoTokenizer, AutoModelForCausalLM, torch.device]:
     lower_name = HF_MODEL_ID.lower()
     if "llama" in lower_name:
         replace_llama(compression_config)
@@ -558,19 +558,19 @@ if __name__ == "__main__":
         compression_config["method_config"].update(METHOD_CONFIG)
         compression_config['divide_method'] = 'newline'
 
-        compression_config = {
-            "method": DEFAULT_METHOD,
-            "method_config": METHOD_CONFIG,
-            "compression": None,
-            "update_kv": True,
-            "compression_content": "all",
-            "divide_method": "newline",
-            "divide_length": 128,
-        }
+        # compression_config = {
+        #     "method": DEFAULT_METHOD,
+        #     "method_config": METHOD_CONFIG,
+        #     "compression": None,
+        #     "update_kv": True,
+        #     "compression_content": "all",
+        #     "divide_method": "newline",
+        #     "divide_length": 128,
+        # }
 
 
         set_seed()
-        TOKENIZER, MODEL, DEVICE = _load_tokenizer_and_model()
+        TOKENIZER, MODEL, DEVICE = _load_tokenizer_and_model(compression_config)
 
         import json
         with open(args.data_path, 'r') as f:

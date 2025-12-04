@@ -127,34 +127,26 @@ class StopOnTokenSequence(StoppingCriteria):
         )
         saw_match = any(self._matched(text) for text in decoded_suffixes)
 
-        if not saw_match:
-            # Fallback: decode a slightly longer tail to catch matches that slip past the minimal window.
-            extra_window = min(
-                cur_len,
-                max(self.max_window_tokens + self.delay_tokens + 8, self.max_window_tokens * 2, 32),
-            )
-            if extra_window > window:
-                longer_tokens = input_ids[:, -extra_window:]
-                longer_decoded = self.tokenizer.batch_decode(
-                    longer_tokens.tolist(),
-                    skip_special_tokens=False,
-                    clean_up_tokenization_spaces=False,
-                )
-                for text in longer_decoded:
-                    if self._matched(text) or self._matched(text.rstrip()):
-                        saw_match = True
-                        break
-
         if saw_match and self._first_match_len is None:
             self._first_match_len = cur_len
+            print(f"[StopOnTokenSequence] matched stop suffix at len={cur_len} (delay={self.delay_tokens})")
 
         if self._first_match_len is None:
             return False
 
         if self.delay_tokens == 0:
+            print(f"[StopOnTokenSequence] stopping immediately at len={cur_len}")
             return True
 
-        return (cur_len - self._first_match_len) >= self.delay_tokens
+        elapsed = cur_len - self._first_match_len
+        remaining = self.delay_tokens - elapsed
+
+        if remaining > 0:
+            print(f"[StopOnTokenSequence] stop matched; waiting {remaining} more token(s) (len={cur_len})")
+            return False
+
+        print(f"[StopOnTokenSequence] delay satisfied; stopping at len={cur_len}")
+        return True
 
 
 def build_document_prompt(doc_id: int, document: str, ) -> str:
@@ -409,7 +401,7 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
         "We should have 5 bullet points (i.e. 1., 2., 3., 4., 5.), following a markdown format. "
         "Under each bullet point, write a detailed paragraph of 3-5 sentences mentioning the specific steps "
         "and details in the reasoning process. It's good to include the formula or techniques "
-        "used in the reasoning process. I will end the takeaways with '---' token underneath the last point.)\n1."
+        "used in the reasoning process. I will end the takeaways with ' --- ' token underneath the last point.)\n1."
     )
     if SUMMARY_COMPLEXTIY == "simple":
         # prompt += Instruction_simple
@@ -427,6 +419,15 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
     return generation_prompt, input_text
 
 
+class DynamicCacheWithCustomizedLength(DynamicCache):
+    def __init__(self, ):
+        super().__init__()
+    
+    def get_seq_length(self, layer_idx: Optional[int] = 0):
+        return self._seen_tokens
+    
+    def set_customized_length(self, customized_length: int):
+        self._seen_tokens = customized_length
 
 
 def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
@@ -440,10 +441,10 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     device = DEVICE
     summaries: List[str] = []
     context_prefix = ""
-    past_key_values_dict: Dict[int, DynamicCache] = {}
+    past_key_values_dict: Dict[int, DynamicCacheWithCustomizedLength] = {}
     token_records: Dict[int, List[int]] = {}
     past_conversation = []
-    past_key_values =  DynamicCache()
+    past_key_values =  DynamicCacheWithCustomizedLength()
     past_context = ''
 
     # stopping_tokens = ["</think>", "###", "##", '---', '\n\n6', '.\n\n6']
@@ -460,7 +461,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     ]
 
     stop_on_any_sequence = StopOnTokenSequence(stop_sequences, tokenizer, delay_tokens=1) if stop_sequences else None
-
+    
     for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
         
         past_context += example + "\n\n###Takeaways:\n"
@@ -469,14 +470,14 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
             model_name = HF_MODEL_ID,
             append_instruction=True,
         )
-        print("=="*100)
-        print("History: \n", input_text)
-        print("=="*100)
+        # print("=="*100)
+        # print("History: \n", input_text)
+        # print("=="*100)
 
 
         inputs = tokenizer(input_text, return_tensors="pt").to(device)
         input_len = inputs["input_ids"].shape[-1]
-    
+        print('prefill size', input_len )
         with ExitStack() as stack:
             progress = TqdmProgress(total_steps=HF_MAX_NEW_TOKENS)
             stack.callback(progress.close)
@@ -495,7 +496,11 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
                 )
 
                 past_key_values = generation.past_key_values
-                print(f"cur cache size: {past_key_values.get_seq_length()}")
+                print("=="*100)
+                print(f"cur cache size: {past_key_values.key_cache[0].shape[2]}")
+                num_seen_tokens = len(generation.sequences[0, :].detach().cpu())
+                print(f"seen tokens: {num_seen_tokens}")
+                past_key_values.set_customized_length(num_seen_tokens)
 
         # assume only one sequence
         full_text_ids = generation.sequences[0, :].detach().cpu()
@@ -522,17 +527,19 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         print(f"raw length={len(raw)} vs summary length={len(summary)}")
         print(f"Warning: raw!=summary") if raw != summary else None
         print("=" * 100)
+        print(tokenizer.decode(full_text_ids[input_len:], skip_special_tokens=False))
+        
         # print(f"Generated summary: {summary}")
         # print(f"Generated summary raw: {raw}")
         print("=" * 100)
 
-        print(f"cache_length= {past_key_values.get_seq_length()} vs full_text_ids_tokenized_len= {len(full_text_ids)}")
+        print(f"cache_length= {past_key_values.key_cache[0].shape[2]} vs full_text_ids_tokenized_len= {len(full_text_ids)}")
 
         past_context += raw + "\n" # add a line switch at the end. the model will also encode this
 
 
     # Get sequence length from first cache
-    cache_len = past_key_values.get_seq_length()
+    cache_len = past_key_values.key_cache[0].shape[2]
     print(f"cached seq_len (buffer size): {cache_len}")
     print(f"total_input_tokens: {input_len}")
 
@@ -590,7 +597,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Precompute KV cache for documents")
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the data file")
-    parser.add_argument("--budget", type=int, default=1024+128+160, help="KV cache budget size")
+    parser.add_argument("--budget", type=int, default=256+128+160, help="KV cache budget size")
     parser.add_argument("--summary_complexity", type=str, default="complex",
                         choices=["simple", "complex"], help="Summary complexity level")
     parser.add_argument("--num_epochs", type=int, default=1,
@@ -630,7 +637,7 @@ if __name__ == "__main__":
         "record_kept_token_indices": False,
         "initial_non_compressible_length": 160, # skip instructions
         # Memory optimization parameters to avoid OOM
-        "similarity_chunk_size": 512,  # Reduce from 1024 to be more conservative
+        "similarity_chunk_size": 2048,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
         "rotate_keys": False,
@@ -677,11 +684,11 @@ if __name__ == "__main__":
         compression_config = {
             "method": DEFAULT_METHOD,
             "method_config": METHOD_CONFIG,
-            "compression": None,
+            "compression": True,
             "update_kv": True,
             "compression_content": "all",
             "divide_method": "newline",
-            "divide_length": 128,
+            "divide_length": 512,
         }
 
 
@@ -697,8 +704,7 @@ if __name__ == "__main__":
             # sample = (
             #     f"\n\n---\n\n"
             #     f"###Problem:\n{item['question']}\n\n"
-            #     f"###Reasoning:\n<think>\n{item['solution']}\n</think>\n\n"
-            #     f"###Solution:\n{item['answer']}\n\n"
+            #     f"###Reasoning:\n<think>\n{item['solution']}\n</think>\nThe answer is {item['answer']}\n\n"
             # )
             sample = (
                 f"\n---\n\n"

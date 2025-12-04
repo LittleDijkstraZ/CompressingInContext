@@ -7,7 +7,7 @@ from limo_query_cluster import LIMOClusterQuery
 
 # Initialize the query system (use k=16 or k=40)
 print("Initializing query system...")
-query_system = LIMOClusterQuery(k_value=16)
+query_system = LIMOClusterQuery(k_value=40)
 
 # Your new question
 new_question = """On $\\triangle ABC$ points $A,D,E$, and $B$ lie that order on side $\\overline{AB}$ "
