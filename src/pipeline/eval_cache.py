@@ -100,12 +100,16 @@ def verify_preload_with_dynamic_cache_streaming(
 
     kv_path = metadata["kv_path"]
     seq_len = metadata.get("seq_len")
+    seen_tokens_cache = metadata.get("seen_tokens_cache")
+    buffer_size = metadata.get("buffer_size")
     documents = metadata.get("documents", [])
     summaries = metadata.get("summaries", [])
 
     print(f"\nLoaded metadata:")
     print(f"  KV cache path: {kv_path}")
-    print(f"  Sequence length: {seq_len}")
+    print(f"  Sequence length (seq_len): {seq_len}")
+    print(f"  Seen tokens (cache): {seen_tokens_cache}")
+    print(f"  Buffer size: {buffer_size}")
     print(f"  Number of documents: {len(documents)}")
 
     # compression_config = get_compression_config()
@@ -205,18 +209,7 @@ def verify_preload_with_dynamic_cache_streaming(
         print(f"  Summary: {summary[:100]}...")
     print(f"\nFollow-up prompt: {follow_up_prompt}")
 
-    context_token_ids_dict = metadata.get("context_token_ids", {})
-    if isinstance(context_token_ids_dict, dict):
-        context_token_list = list(context_token_ids_dict.values())[0]
-    else:
-        context_token_list = context_token_ids_dict
-    context_input_ids = torch.tensor(
-        [context_token_list], dtype=torch.long, device=device
-    )
-    context_attention_mask = torch.ones_like(
-        context_input_ids, dtype=torch.bool, device=device
-    )
-
+    # Encode the follow-up prompt
     follow_up_inputs = tokenizer(
         follow_up_prompt,
         return_tensors="pt",
@@ -225,15 +218,33 @@ def verify_preload_with_dynamic_cache_streaming(
     follow_up_input_ids = follow_up_inputs["input_ids"].to(device)
     follow_up_attention_mask = follow_up_inputs["attention_mask"].to(device)
 
-    input_ids = torch.cat([context_input_ids, follow_up_input_ids], dim=-1)
-    attention_mask = torch.cat(
-        [context_attention_mask, follow_up_attention_mask], dim=-1
-    )
-    print(f"\nAttention mask sum: {attention_mask.sum().item()}")
+    # Create placeholder tokens for the cached context
+    # Use seq_len (which is _seen_tokens from cache) to determine how many placeholders
+    num_placeholder_tokens = seq_len if seq_len is not None else cache_seq_len
 
-    print(f"Context token shape: {context_input_ids.shape}")
+    # Create placeholder input_ids (use pad_token_id as placeholder)
+    placeholder_input_ids = torch.full(
+        (1, num_placeholder_tokens),
+        tokenizer.pad_token_id,
+        dtype=torch.long,
+        device=device
+    )
+    placeholder_attention_mask = torch.ones(
+        (1, num_placeholder_tokens),
+        dtype=torch.bool,
+        device=device
+    )
+
+    # Concatenate placeholders + follow-up prompt
+    input_ids = torch.cat([placeholder_input_ids, follow_up_input_ids], dim=-1)
+    attention_mask = torch.cat(
+        [placeholder_attention_mask, follow_up_attention_mask], dim=-1
+    )
+
+    print(f"\nAttention mask sum: {attention_mask.sum().item()}")
+    print(f"Placeholder tokens (for cached context): {num_placeholder_tokens}")
     print(f"Follow-up token shape: {follow_up_input_ids.shape}")
-    print(f"Concatenated input shape: {input_ids.shape}")
+    print(f"Total input shape (placeholders + follow-up): {input_ids.shape}")
     print(f"Past KV cache seq_len: {cache_seq_len}")
 
     print(f"\nStreaming generation with past_key_values (max_new_tokens={max_new_tokens}, repeat_time={repeat_time})...")

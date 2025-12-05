@@ -398,10 +398,10 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
     # )
     Instruction_complex = (
         "These takeaways should be bullet points. "
-        "We should have 5 bullet points (i.e. 1., 2., 3., 4., 5.), following a markdown format. "
+        "We should have 5 bullet points, following a markdown format. "
         "Under each bullet point, write a detailed paragraph of 3-5 sentences mentioning the specific steps "
         "and details in the reasoning process. It's good to include the formula or techniques "
-        "used in the reasoning process. I will end the takeaways with '---' token underneath the last point.)\n1."
+        "used in the reasoning process. I will generate 5 points (i.e. 1., 2., 3., 4., 5.) and end the takeaways with '---' token underneath the last point.)\n1."
     )
     if SUMMARY_COMPLEXTIY == "simple":
         # prompt += Instruction_simple
@@ -453,7 +453,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     # stopping_tokens = ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', '\n---\n\n']
     # stopping_tokens =  ['\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
     # stopping_tokens =  ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
-    stopping_tokens =  ['---', ]
+    stopping_tokens =  ['---',]
 
 
     stop_sequences = [
@@ -461,9 +461,14 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     ]
 
     stop_on_any_sequence = StopOnTokenSequence(stop_sequences, tokenizer, delay_tokens=2) if stop_sequences else None
-    
+
+    # Track the previous input text to compute only new tokens
+    previous_input_text = ""
+    # Track the saved _seen_tokens value from the previous round (after set_customized_length)
+    saved_seen_tokens = None
+
     for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
-        
+
         past_context += example + "\n\n###Takeaways:\n"
         input_text, past_context = apply_chat_template(
             input_text = past_context,
@@ -474,16 +479,41 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         # print("History: \n", input_text)
         # print("=="*100)
 
+        # If we have past_key_values, use placeholders for already-cached tokens
+        # IMPORTANT: When rotation is enabled, we should NOT use placeholders because
+        # they cause cache_position to be computed incorrectly!
+        if past_key_values is not None and saved_seen_tokens is not None:
+            # Tokenize only the NEW content added in this round
+            # This is the text that was added since the last round
+            new_content = input_text[len(previous_input_text):]
+            new_inputs = tokenizer(new_content, return_tensors="pt").to(device)
+            new_input_ids = new_inputs["input_ids"]
+            num_new_tokens = new_input_ids.shape[-1]
 
-        inputs = tokenizer(input_text, return_tensors="pt").to(device)
-        input_len = inputs["input_ids"].shape[-1]
-        print('prefill size', input_len )
+            print(f'Cached tokens (saved from previous round): {saved_seen_tokens}, New tokens: {num_new_tokens}')
+
+            # When rotation is enabled, just pass the new tokens directly
+            # The model will use past_key_values to continue from where it left off
+            # and cache_position will be computed correctly based on _seen_tokens
+            inputs = {"input_ids": new_input_ids, "attention_mask": torch.ones_like(new_input_ids, dtype=torch.long)}
+            input_len = num_new_tokens
+            print(f'Prefill size (new tokens only, no placeholders): {input_len}')
+        else:
+            # First document: no cache yet, use full input
+            full_inputs = tokenizer(input_text, return_tensors="pt").to(device)
+            inputs = full_inputs
+            input_len = full_inputs["input_ids"].shape[-1]
+            print(f'Prefill size (first document): {input_len}')
+
+        # Update previous_input_text for next iteration
+        previous_input_text = input_text
+
         with ExitStack() as stack:
             progress = TqdmProgress(total_steps=HF_MAX_NEW_TOKENS)
             stack.callback(progress.close)
             stopping_criteria = [progress]
             if stop_on_any_sequence:
-                stop_on_any_sequence.reset(start_len=input_len)
+                stop_on_any_sequence.reset(start_len=inputs["input_ids"].shape[-1])
                 stopping_criteria.append(stop_on_any_sequence)
             with torch.inference_mode():
                 generation = model.generate(
@@ -496,11 +526,31 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
                 )
 
                 past_key_values = generation.past_key_values
+
+                # Apply rotation after generation completes (if needed)
+                from rkv.modeling import apply_rotation_after_generation
+                apply_rotation_after_generation(past_key_values, model.config)
+
                 print("=="*100)
                 print(f"cur cache size: {past_key_values.key_cache[0].shape[2]}")
                 num_seen_tokens = len(generation.sequences[0, :].detach().cpu())
-                print(f"seen tokens: {num_seen_tokens}")
-                past_key_values.set_customized_length(num_seen_tokens)
+
+                # Use _seen_tokens from cache if available (it accounts for rotation)
+                # Otherwise fall back to sequence length
+                if hasattr(past_key_values, '_seen_tokens'):
+                    effective_seen_tokens = past_key_values._seen_tokens
+                    print(f"seen tokens (sequence length): {num_seen_tokens}")
+                    print(f"_seen_tokens (cache): {past_key_values._seen_tokens}")
+                    print(f"using _seen_tokens for set_customized_length")
+                else:
+                    effective_seen_tokens = num_seen_tokens
+                    print(f"seen tokens: {num_seen_tokens}")
+
+                past_key_values.set_customized_length(effective_seen_tokens)
+
+                # Save the _seen_tokens value for the next iteration
+                saved_seen_tokens = effective_seen_tokens
+                print(f"Saved _seen_tokens for next iteration: {saved_seen_tokens}")
 
         # assume only one sequence
         full_text_ids = generation.sequences[0, :].detach().cpu()
@@ -574,10 +624,21 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     print(f"Total context tokens to cache: {len(context_token_ids)}")
     print(f"cache length=", cache_len)
 
+    # Get _seen_tokens from cache if available
+    seen_tokens_cache = None
+    if hasattr(past_key_values, '_seen_tokens'):
+        seen_tokens_cache = past_key_values._seen_tokens
+        print(f"_seen_tokens (cache): {seen_tokens_cache}")
+
+    # Use seen_tokens_cache as seq_len if available (accounts for rotation)
+    # Otherwise fall back to actual_seq_len
+    seq_len_to_save = seen_tokens_cache if seen_tokens_cache is not None else actual_seq_len
+
     metadata = {
         "kv_path": str(kv_path.resolve()),
-        "seq_len": actual_seq_len,  # Use the actual next token position
-        "buffer_size": cache_len,  # Also save the buffer size for reference
+        "seq_len": seq_len_to_save,  # Use _seen_tokens from cache (accounts for rotation)
+        "buffer_size": cache_len,  # The actual cache buffer size
+        "seen_tokens_cache": seen_tokens_cache,  # Same as seq_len when rotation is enabled
         "rotation_enabled": METHOD_CONFIG.get("rotate_keys", False),
         "rotation_offset": METHOD_CONFIG.get("rotation_offset", 0),
         "initial_non_compressible_length": METHOD_CONFIG.get("initial_non_compressible_length", 0),
@@ -585,6 +646,8 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         "summaries": summaries,
         "context_token_ids": context_token_ids,
     }
+
+    print(f"Metadata seq_len set to: {seq_len_to_save} (from _seen_tokens: {seen_tokens_cache is not None})")
     
     # Save metadata to file (will overwrite existing metadata.json)
     with metadata_path.open("w") as fp:
@@ -598,7 +661,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Precompute KV cache for documents")
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the data file")
-    parser.add_argument("--budget", type=int, default=512+128+160, help="KV cache budget size")
+    parser.add_argument("--budget", type=int, default=320+64, help="KV cache budget size")
     parser.add_argument("--summary_complexity", type=str, default="complex",
                         choices=["simple", "complex"], help="Summary complexity level")
     parser.add_argument("--num_epochs", type=int, default=1,
@@ -623,14 +686,14 @@ if __name__ == "__main__":
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
     HF_MAX_NEW_TOKENS = 2048
     SUMMARY_COMPLEXTIY = args.summary_complexity
-    HF_TEMPERATURE = 0.2
+    HF_TEMPERATURE = 0.1
     HF_TOP_P = 0.95
     HF_MAX_COMPLETIONS_PER_CALL = 1
 
     DEFAULT_METHOD = "rkv"
     METHOD_CONFIG = {
         "budget": args.budget,
-        "window_size": 128, # BUG: IDK why budget need to be > window_size here
+        "window_size": 200, # BUG: IDK why budget need to be > window_size here
         "kernel_size": 7,
         "mix_lambda": 0.1,
         "retain_ratio": 0.8,
@@ -641,7 +704,7 @@ if __name__ == "__main__":
         "similarity_chunk_size": 2048,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
-        "rotate_keys": False,
+        "rotate_keys": True,
         "rotation_offset": 512,
     }
 
@@ -701,18 +764,16 @@ if __name__ == "__main__":
             data = json.load(f)
 
         documents = []
-        for idx, item in enumerate(data):
-            # sample = (
-            #     f"\n\n---\n\n"
-            #     f"###Problem:\n{item['question']}\n\n"
-            #     f"###Reasoning:\n<think>\n{item['solution']}\n</think>\nThe answer is {item['answer']}\n\n"
-            # )
+        for idx, item in enumerate(data[:10]):
             sample = (
-                f"\n---\n\n"
-                f"###Problem:\n{item['problem']}\n\n"
-                f"###Reasoning:\n<think>\n{item['reasoning']}\n</think>\n\n"
-                f"###Solution:\n{item['solution']}\n\n"
+                f"###Problem:\n---\n{item['question']}\n---\n"
+                f"###Reasoning:\n---\n<think>\n{item['solution']}\n</think>\nThe answer is" + '\\boxed{' + f"{item['answer']}" "}\n---\n"
             )
+            # sample = (
+            #     f"###Problem:\n---\n{item['problem']}\n---\n"
+            #     f"###Reasoning:\n---\n<think>\n{item['reasoning']}\n</think>\n---\n"
+            #     f"###Solution:\n---\n{item['solution']}\n---\n"
+            # )
             sample_len = len(TOKENIZER(sample).input_ids)
             if sample_len > 12000:
                 print(f"Sample {idx} is too long: {sample_len} tokens. Skipping.")
