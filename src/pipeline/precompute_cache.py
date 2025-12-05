@@ -422,12 +422,42 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
 class DynamicCacheWithCustomizedLength(DynamicCache):
     def __init__(self, ):
         super().__init__()
-    
+        self._rotation_enabled = False  # Flag to indicate if rotation has been applied
+
     def get_seq_length(self, layer_idx: Optional[int] = 0):
         return self._seen_tokens
-    
+
     def set_customized_length(self, customized_length: int):
+        """
+        Manually set _seen_tokens to a specific value.
+        This is used after rotation to set the correct position.
+        """
+        print(f"[CACHE] set_customized_length: {customized_length}, enabling rotation mode")
         self._seen_tokens = customized_length
+        # Enable rotation mode - from now on, _seen_tokens will be manually controlled
+        self._rotation_enabled = True
+
+    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
+        """
+        Override update to prevent automatic _seen_tokens increment when rotation is enabled.
+        """
+        # Store the current _seen_tokens value
+        old_seen_tokens = self._seen_tokens if hasattr(self, '_seen_tokens') else 0
+
+        # Call parent update to add keys/values to cache
+        result = super().update(key_states, value_states, layer_idx, cache_kwargs)
+
+        # If rotation is enabled, manually control _seen_tokens
+        if self._rotation_enabled and layer_idx == 0:
+            # The parent update() automatically incremented _seen_tokens
+            # We need to manually control it instead
+            new_tokens = key_states.shape[-2]
+            expected_seen_tokens = old_seen_tokens + new_tokens
+            if self._seen_tokens != expected_seen_tokens:
+                print(f"[CACHE UPDATE] Layer 0: Correcting _seen_tokens: {self._seen_tokens} -> {expected_seen_tokens} (added {new_tokens} tokens, rotation_enabled={self._rotation_enabled})")
+            self._seen_tokens = expected_seen_tokens
+
+        return result
 
 
 def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
