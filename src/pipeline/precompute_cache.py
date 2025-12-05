@@ -215,7 +215,7 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
     # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
     # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
     # newline_candidates = ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
-    newline_candidates = ['---', '---\n', '---\n\n', ]
+    newline_candidates = ['---', '---\n', '---\n\n', '</end>' '<｜end▁of▁sentence｜>']
 
     newline_token_ids: List[int] = []
     newline_strings: List[str] = []
@@ -401,7 +401,7 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
         "We should have 5 bullet points (i.e. 1., 2., 3., 4., 5.), following a markdown format. "
         "Under each bullet point, write a detailed paragraph of 3-5 sentences mentioning the specific steps "
         "and details in the reasoning process. It's good to include the formula or techniques "
-        "used in the reasoning process. I will end the takeaways with ' --- ' token underneath the last point.)\n1."
+        "used in the reasoning process. I will end the takeaways with '---' token underneath the last point.)\n1."
     )
     if SUMMARY_COMPLEXTIY == "simple":
         # prompt += Instruction_simple
@@ -460,7 +460,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         tokenizer.encode(token, add_special_tokens=False) for token in stopping_tokens
     ]
 
-    stop_on_any_sequence = StopOnTokenSequence(stop_sequences, tokenizer, delay_tokens=1) if stop_sequences else None
+    stop_on_any_sequence = StopOnTokenSequence(stop_sequences, tokenizer, delay_tokens=2) if stop_sequences else None
     
     for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
         
@@ -546,7 +546,8 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     # Get the actual next token position from the R1KV compressor
     # This is critical when rotation is enabled!
     from .utils import get_next_token_position_from_model
-    next_token_position = get_next_token_position_from_model(MODEL)
+    # next_token_position = get_next_token_position_from_model(MODEL)
+    next_token_position = past_key_values.get_seq_length()
 
     if next_token_position is not None:
         print(f"Next token position (from R1KV tracker): {next_token_position}")
@@ -597,7 +598,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Precompute KV cache for documents")
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the data file")
-    parser.add_argument("--budget", type=int, default=256+128+160, help="KV cache budget size")
+    parser.add_argument("--budget", type=int, default=512+128+160, help="KV cache budget size")
     parser.add_argument("--summary_complexity", type=str, default="complex",
                         choices=["simple", "complex"], help="Summary complexity level")
     parser.add_argument("--num_epochs", type=int, default=1,
@@ -622,7 +623,7 @@ if __name__ == "__main__":
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
     HF_MAX_NEW_TOKENS = 2048
     SUMMARY_COMPLEXTIY = args.summary_complexity
-    HF_TEMPERATURE = 0.6
+    HF_TEMPERATURE = 0.2
     HF_TOP_P = 0.95
     HF_MAX_COMPLETIONS_PER_CALL = 1
 
@@ -684,11 +685,11 @@ if __name__ == "__main__":
         compression_config = {
             "method": DEFAULT_METHOD,
             "method_config": METHOD_CONFIG,
-            "compression": True,
+            "compression": False,
             "update_kv": True,
             "compression_content": "all",
             "divide_method": "newline",
-            "divide_length": 512,
+            "divide_length": 256,
         }
 
 

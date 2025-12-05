@@ -14,7 +14,8 @@ from transformers import (
     TextIteratorStreamer,
 )
 
-from utils import PatchedDynamicCache
+from .utils import PatchedDynamicCache
+from .precompute_cache import DynamicCacheWithCustomizedLength
 
 
 def load_precomputed_kv_as_dynamic_cache(
