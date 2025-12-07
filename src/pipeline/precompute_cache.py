@@ -509,9 +509,12 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         # print("History: \n", input_text)
         # print("=="*100)
 
-        # If we have past_key_values, use placeholders for already-cached tokens
+        # If we have past_key_values, decide whether to use placeholders
         # IMPORTANT: When rotation is enabled, we should NOT use placeholders because
         # they cause cache_position to be computed incorrectly!
+        # When rotation is disabled, we SHOULD use placeholders to match the cache size
+        rotation_enabled = compression_config.get("method_config", {}).get("rotate_keys", False)
+
         if past_key_values is not None and saved_seen_tokens is not None:
             # Tokenize only the NEW content added in this round
             # This is the text that was added since the last round
@@ -522,12 +525,52 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
             print(f'Cached tokens (saved from previous round): {saved_seen_tokens}, New tokens: {num_new_tokens}')
 
-            # When rotation is enabled, just pass the new tokens directly
-            # The model will use past_key_values to continue from where it left off
-            # and cache_position will be computed correctly based on _seen_tokens
-            inputs = {"input_ids": new_input_ids, "attention_mask": torch.ones_like(new_input_ids, dtype=torch.long)}
-            input_len = num_new_tokens
-            print(f'Prefill size (new tokens only, no placeholders): {input_len}')
+            if rotation_enabled:
+                # When rotation is enabled, we MUST use placeholders!
+                # The transformers library expects input_ids.shape[1] = _seen_tokens + new_tokens
+                # Otherwise it will create an empty cache_position and crash
+                # Use _seen_tokens (not cache size) for placeholders because that's the effective position
+                placeholder_input_ids = torch.full(
+                    (1, saved_seen_tokens),
+                    tokenizer.pad_token_id,
+                    dtype=torch.long,
+                    device=device
+                )
+                placeholder_attention_mask = torch.ones(
+                    (1, saved_seen_tokens),
+                    dtype=torch.long,
+                    device=device
+                )
+
+                # Concatenate placeholders with new tokens
+                combined_input_ids = torch.cat([placeholder_input_ids, new_input_ids], dim=1)
+                combined_attention_mask = torch.cat([placeholder_attention_mask, new_inputs["attention_mask"]], dim=1)
+
+                inputs = {"input_ids": combined_input_ids, "attention_mask": combined_attention_mask}
+                input_len = combined_input_ids.shape[-1]
+                print(f'Prefill size (with {saved_seen_tokens} placeholders + {num_new_tokens} new tokens): {input_len}')
+            else:
+                # When rotation is disabled, use placeholders for cached tokens
+                # Create placeholder tokens for the cached context
+                placeholder_input_ids = torch.full(
+                    (1, saved_seen_tokens),
+                    tokenizer.pad_token_id,
+                    dtype=torch.long,
+                    device=device
+                )
+                placeholder_attention_mask = torch.ones(
+                    (1, saved_seen_tokens),
+                    dtype=torch.long,
+                    device=device
+                )
+
+                # Concatenate placeholders with new tokens
+                combined_input_ids = torch.cat([placeholder_input_ids, new_input_ids], dim=1)
+                combined_attention_mask = torch.cat([placeholder_attention_mask, new_inputs["attention_mask"]], dim=1)
+
+                inputs = {"input_ids": combined_input_ids, "attention_mask": combined_attention_mask}
+                input_len = combined_input_ids.shape[-1]
+                print(f'Prefill size (with {saved_seen_tokens} placeholders + {num_new_tokens} new tokens): {input_len}')
         else:
             # First document: no cache yet, use full input
             full_inputs = tokenizer(input_text, return_tensors="pt").to(device)
@@ -537,6 +580,15 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
         # Update previous_input_text for next iteration
         previous_input_text = input_text
+
+        # Debug: print input shape and past_key_values info
+        print(f"[DEBUG] inputs['input_ids'].shape = {inputs['input_ids'].shape}")
+        if past_key_values is not None:
+            print(f"[DEBUG] past_key_values._seen_tokens = {past_key_values._seen_tokens}")
+            if len(past_key_values.key_cache) > 0:
+                print(f"[DEBUG] past_key_values.key_cache[0].shape = {past_key_values.key_cache[0].shape}")
+            else:
+                print(f"[DEBUG] past_key_values.key_cache is empty (first document)")
 
         with ExitStack() as stack:
             progress = TqdmProgress(total_steps=HF_MAX_NEW_TOKENS)
@@ -559,28 +611,31 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
 
                 # Apply rotation after generation completes (if needed)
                 from rkv.modeling import apply_rotation_after_generation
-                apply_rotation_after_generation(past_key_values, model.config)
+                rotation_applied = apply_rotation_after_generation(past_key_values, model.config)
 
                 print("=="*100)
                 print(f"cur cache size: {past_key_values.key_cache[0].shape[2]}")
                 num_seen_tokens = len(generation.sequences[0, :].detach().cpu())
 
-                # Use _seen_tokens from cache if available (it accounts for rotation)
-                # Otherwise fall back to sequence length
-                if hasattr(past_key_values, '_seen_tokens'):
+                # Only call set_customized_length if rotation was applied
+                # Otherwise, _seen_tokens is automatically updated by the update() method
+                if rotation_applied:
+                    # After rotation, _seen_tokens has been adjusted
                     effective_seen_tokens = past_key_values._seen_tokens
                     print(f"seen tokens (sequence length): {num_seen_tokens}")
-                    print(f"_seen_tokens (cache): {past_key_values._seen_tokens}")
+                    print(f"_seen_tokens (cache, after rotation): {past_key_values._seen_tokens}")
                     print(f"using _seen_tokens for set_customized_length")
+                    past_key_values.set_customized_length(effective_seen_tokens)
+                    saved_seen_tokens = effective_seen_tokens
+                    print(f"Saved _seen_tokens for next iteration: {saved_seen_tokens}")
                 else:
-                    effective_seen_tokens = num_seen_tokens
-                    print(f"seen tokens: {num_seen_tokens}")
-
-                past_key_values.set_customized_length(effective_seen_tokens)
-
-                # Save the _seen_tokens value for the next iteration
-                saved_seen_tokens = effective_seen_tokens
-                print(f"Saved _seen_tokens for next iteration: {saved_seen_tokens}")
+                    # No rotation, use the current _seen_tokens (which was auto-updated)
+                    if hasattr(past_key_values, '_seen_tokens'):
+                        saved_seen_tokens = past_key_values._seen_tokens
+                        print(f"No rotation applied, using current _seen_tokens: {saved_seen_tokens}")
+                    else:
+                        saved_seen_tokens = num_seen_tokens
+                        print(f"No rotation applied, using sequence length: {saved_seen_tokens}")
 
         # assume only one sequence
         full_text_ids = generation.sequences[0, :].detach().cpu()
@@ -691,7 +746,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Precompute KV cache for documents")
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the data file")
-    parser.add_argument("--budget", type=int, default=320+64, help="KV cache budget size")
+    parser.add_argument("--budget", type=int, default=700+80, help="KV cache budget size")
     parser.add_argument("--summary_complexity", type=str, default="complex",
                         choices=["simple", "complex"], help="Summary complexity level")
     parser.add_argument("--num_epochs", type=int, default=1,
@@ -729,7 +784,7 @@ if __name__ == "__main__":
         "retain_ratio": 0.8,
         "retain_direction": "last",
         "record_kept_token_indices": False,
-        "initial_non_compressible_length": 160, # skip instructions
+        "initial_non_compressible_length": 80, # skip instructions
         # Memory optimization parameters to avoid OOM
         "similarity_chunk_size": 2048,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
