@@ -579,7 +579,7 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         "seq_len": actual_seq_len,  # Use the actual next token position
         "buffer_size": cache_len,  # Also save the buffer size for reference
         "rotation_enabled": METHOD_CONFIG.get("rotate_keys", False),
-        "rotation_offset": METHOD_CONFIG.get("rotation_offset", 0),
+        "target_rotation_position": METHOD_CONFIG.get("target_rotation_position", 0),
         "initial_non_compressible_length": METHOD_CONFIG.get("initial_non_compressible_length", 0),
         "documents": documents,
         "summaries": summaries,
@@ -642,7 +642,7 @@ if __name__ == "__main__":
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
         "rotate_keys": False,
-        "rotation_offset": 512,
+        "target_rotation_position": 512,
     }
 
     HF_GENERATION_KWARGS = {

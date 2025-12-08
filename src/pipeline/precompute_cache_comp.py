@@ -696,7 +696,7 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
         "buffer_size": cache_len,  # The actual cache buffer size
         "seen_tokens_cache": seen_tokens_cache,  # Same as seq_len when rotation is enabled
         "rotation_enabled": METHOD_CONFIG.get("rotate_keys", False),
-        "rotation_offset": METHOD_CONFIG.get("rotation_offset", 0),
+        "target_rotation_position": METHOD_CONFIG.get("target_rotation_position", 0),
         "initial_non_compressible_length": METHOD_CONFIG.get("initial_non_compressible_length", 0),
         "documents": documents,
         "summaries": summaries,
@@ -761,8 +761,8 @@ if __name__ == "__main__":
         "similarity_chunk_size": 4096,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
-        "rotate_keys": True,
-        "rotation_offset": 3072,
+        "rotate_keys": False,
+        "target_rotation_position": 3072,
     }
 
     HF_GENERATION_KWARGS = {
