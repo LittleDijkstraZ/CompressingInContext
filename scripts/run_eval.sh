@@ -10,3 +10,6 @@
 python -m src.pipeline.eval_cache \
     --kv_cache_dir ./hf_precomputed_kv_budget_384_comp_complex \
     --repeat_time 16
+
+
+# python -m src.pipeline.eval_cache     --kv_cache_dir ./hf_precomputed_kv_budget_780_comp_complex     --repeat_time 16 --model_name 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B'

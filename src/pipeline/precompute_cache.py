@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "9"
 from transformers.cache_utils import DynamicCache
 import random
 import shutil
@@ -149,23 +150,6 @@ class StopOnTokenSequence(StoppingCriteria):
         return True
 
 
-def build_document_prompt(doc_id: int, document: str, ) -> str:
-    
-    instruction = (
-        "Summarize the current document in 1 sentence."
-    )
-    
-    parts: List[str] = []
-    parts.append(instruction)
-    parts.extend([
-        f"```document {doc_id}```",
-        document,
-        "```",
-    ])
-    return "\n".join(parts)
-
-
-
 def set_seed(seed: int = 42) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -215,7 +199,7 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
     # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
     # newline_candidates = ["\n", ".\n", ")\n", "\n\n", ".\n\n", ")\n\n"]
     # newline_candidates = ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
-    newline_candidates = ['---', '---\n', '---\n\n', '</end>' '<｜end▁of▁sentence｜>']
+    newline_candidates = ['---', '---\n', '---\n\n', '<｜end▁of▁sentence｜>']
 
     newline_token_ids: List[int] = []
     newline_strings: List[str] = []
@@ -240,133 +224,8 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
     return tokenizer, model, device
 
 
-
-
-
-
-def _iter_cache_layers(past_key_values: Any):
-    cache_object = past_key_values.to_legacy_cache() if hasattr(past_key_values, "to_legacy_cache") else past_key_values
-    if cache_object is None:
-        raise RuntimeError("Model.generate did not return usable past_key_values.")
-
-    if isinstance(cache_object, dict):
-        items = list(cache_object.items())
-        for fallback_idx, (raw_layer_idx, payload) in enumerate(items):
-            yield _normalize_layer_idx(raw_layer_idx, fallback_idx), payload
-        return
-
-    if isinstance(cache_object, (list, tuple)):
-        for layer_idx, payload in enumerate(cache_object):
-            yield layer_idx, payload
-        return
-
-    raise TypeError(f"Unsupported past_key_values container: {type(cache_object).__name__}")
-
-
-def _normalize_layer_idx(raw_idx: Any, fallback: int) -> int:
-    if isinstance(raw_idx, int):
-        return raw_idx
-    if isinstance(raw_idx, str):
-        digits = ''.join(ch for ch in raw_idx if ch.isdigit())
-        if digits:
-            return int(digits)
-    return fallback
-
-
-def _tensor_candidates(candidate: Any):
-    todo = [candidate]
-    seen = set()
-
-    while todo:
-        current = todo.pop()
-        if current is None:
-            continue
-        current_id = id(current)
-        if current_id in seen:
-            continue
-        seen.add(current_id)
-
-        if isinstance(current, torch.Tensor):
-            yield current
-            continue
-
-        if isinstance(current, dict):
-            todo.extend(current.values())
-            todo.extend(current.get(name) for name in ("key", "value", "keys", "values", "k", "v") if name in current)
-            continue
-
-        if isinstance(current, (list, tuple)):
-            todo.extend(current)
-            continue
-
-        for name in ("key", "keys", "value", "values", "k", "v", "key_cache", "value_cache"):
-            if hasattr(current, name):
-                todo.append(getattr(current, name))
-
-
-def _fallback_sources(full_cache: Any, layer_idx: Optional[int]):
-    if full_cache is None or layer_idx is None:
-        return
-
-    for attr in ("key_cache", "value_cache"):
-        store = getattr(full_cache, attr, None)
-        if isinstance(store, (list, tuple)) and 0 <= layer_idx < len(store):
-            yield store[layer_idx]
-        elif isinstance(store, dict):
-            yield store.get(layer_idx) or store.get(str(layer_idx))
-
-    layers = getattr(full_cache, "layers", None)
-    if isinstance(layers, (list, tuple)) and 0 <= layer_idx < len(layers):
-        yield layers[layer_idx]
-
-
-def _materialize_layer_cache(layer_payload: Any, *, full_cache: Optional[Any] = None, layer_idx: Optional[int] = None) -> tuple[torch.Tensor, torch.Tensor]:
-    tensors = []
-    for tensor in _tensor_candidates(layer_payload):
-        tensors.append(tensor)
-        if len(tensors) == 2:
-            break
-
-    if len(tensors) < 2:
-        for extra_source in _fallback_sources(full_cache, layer_idx):
-            for tensor in _tensor_candidates(extra_source):
-                tensors.append(tensor)
-                if len(tensors) == 2:
-                    break
-            if len(tensors) == 2:
-                break
-
-    if len(tensors) < 2:
-        raise RuntimeError(f"Unable to materialize tensor KV cache for layer {layer_idx}.")
-
-    return tensors[0], tensors[1]
-
-
-def _collect_layer_tensors(past_key_values: Any) -> Dict[int, Dict[str, torch.Tensor]]:
-    collected: Dict[int, Dict[str, torch.Tensor]] = {}
-    for layer_idx, payload in _iter_cache_layers(past_key_values):
-        key_tensor, value_tensor = _materialize_layer_cache(payload, full_cache=past_key_values, layer_idx=layer_idx)
-        collected[layer_idx] = {
-            "key": key_tensor.detach().cpu(),
-            "value": value_tensor.detach().cpu(),
-        }
-    return collected
-
-
-def _append_context(context_prefix: str, doc_id: int, document: str, summary: str) -> str:
-    parts: List[str] = []
-    if context_prefix:
-        parts.append(context_prefix)
-    parts.extend([f"Document {doc_id}:", document])
-    summary = summary.strip()
-    if summary:
-        parts.extend(["Summary:", summary])
-    return "\n".join(part for part in parts if part).strip()
-
-
-
-def apply_chat_template(input_text, model_name: str, append_instruction=False) -> str:
-    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B':
+def apply_chat_template_takeaways(input_text, model_name: str, append_instruction=False) -> str:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
@@ -402,6 +261,70 @@ def apply_chat_template(input_text, model_name: str, append_instruction=False) -
         "Under each bullet point, write a detailed paragraph of 3-5 sentences mentioning the specific steps "
         "and details in the reasoning process. It's good to include the formula or techniques "
         "used in the reasoning process. I will generate 5 points (i.e. 1., 2., 3., 4., 5.) and end the takeaways with '---' token underneath the last point.)\n1."
+    )
+    if SUMMARY_COMPLEXTIY == "simple":
+        # prompt += Instruction_simple
+        cur_backbone += Instruction_simple
+    # elif SUMMARY_COMPLEXTIY == "medium":
+    #     prompt += Instruction_medium
+    elif SUMMARY_COMPLEXTIY == "complex":
+        # prompt += Instruction_complex
+        cur_backbone += Instruction_complex
+
+    if append_instruction:
+        input_text += cur_backbone
+    generation_prompt = f"""{bos}{user_token}{prompt}
+{assistant_token}{think_end_think}{input_text}"""
+    return generation_prompt, input_text
+
+
+def apply_chat_template_notepad(input_text, model_name: str, append_instruction=False, is_first_document=True) -> str:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
+        bos = "<｜begin▁of▁sentence｜>"
+        user_token = "<｜User｜>"
+        assistant_token = "<｜Assistant｜>"
+        # think_end_think = "<think>\n</think>"
+        think_end_think = "<think>\nOkey, my learning begins:"
+
+    else:
+        raise ValueError(f"Unsupported model for chat template: {model_name}")
+
+    prompt = (
+        "You are currently learning from some examples, which will later help you to solve similar problems. "
+        "Given the problem, reasoning, and solution, you will maintain a note that captures key insights and strategies. "
+        "After each new problem, you should update your note (under the ###Note section) to incorporate new learnings while keeping it concise. "
+    )
+
+    # Different backbone for first document vs subsequent documents
+    if is_first_document:
+        cur_backbone = (
+            "(Given the problem, reasoning, and solution, I will create an initial note capturing the key insights "
+            "and strategies that can help me solve similar problems in the future. "
+        )
+    else:
+        cur_backbone = (
+            "(Given the new problem, reasoning, and solution, I will now modify and update my existing note "
+            "to incorporate new insights from this problem while keeping the note concise and comprehensive. "
+        )
+
+    Instruction_simple = (
+        "The note should be bullet points. They should be highlevel, short and to the point. "
+        "We should have 3 bullet points (i.e. 1., 2., 3.), following a markdown format. I will end the note with the '---' token underneath the last point.)\n1."
+    )
+    # Instruction_medium = (
+    #     "These takeaways should be bullet points. "
+    #     "You should have 5 bullet points (i.e. 1., 2., 3., 4., 5.). "
+    #     "For each bullet point, you should have 2-3 sub-bullet points. (i.e. 1.1., 1.2., 1.3)"
+    # )
+    Instruction_complex = (
+        "The note should be bullet points. "
+        "I should first identify and describe the category of these problems that I've just solved. "
+        "Then, I need to to write down thekey insights and strategies "
+        "that can help me solve similar problems in the future. "
+        "If there is a previous note, I need to update it with the new insights and strategies, "
+        "keeping points from previous note or adding points to it that are commonly applicable to similar problems."
+        "I must include specific steps and details from the reasoning process. "
+        "I will generate 5 points (i.e. 1., 2., 3., 4., 5.) and end the note with '---' token underneath the last point.)\n1."
     )
     if SUMMARY_COMPLEXTIY == "simple":
         # prompt += Instruction_simple
@@ -460,9 +383,9 @@ class DynamicCacheWithCustomizedLength(DynamicCache):
         return result
 
 
-def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
+def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict[str, Any]:
     metadata_path = PRECOMPUTED_DIR / "metadata.json"
-    if metadata_path.exists() and not os.getenv("RKV_RECOMPUTE_KV"):
+    if metadata_path.exists() and not recompute and not os.getenv("RKV_RECOMPUTE_KV"):
         with metadata_path.open("r") as fp:
             return json.load(fp)
 
@@ -497,14 +420,39 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     # Track the saved _seen_tokens value from the previous round (after set_customized_length)
     saved_seen_tokens = None
 
-    for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
+    # Track the current note that gets updated each iteration
+    current_note = ""
 
-        past_context += example + "\n\n###Takeaways:\n"
-        input_text, past_context = apply_chat_template(
-            input_text = past_context,
-            model_name = HF_MODEL_ID,
-            append_instruction=True,
-        )
+    for doc_id, example in enumerate(tqdm(documents, desc="Precomputing HF KV")):
+        if args.mode == "notepad":
+            is_first_document = (doc_id == 0)
+
+            # Build the context: document + previous note (if exists) + prompt to update
+            past_context += example + "\n"
+
+            if not is_first_document and current_note:
+                # Append the previous note and ask the model to modify it
+                past_context += f"\n###Previous Note:\n{current_note}\n"
+
+            past_context += "\n###Note:\n"
+
+            input_text, past_context = apply_chat_template_notepad(
+                input_text = past_context,
+                model_name = HF_MODEL_ID,
+                append_instruction=True,
+                is_first_document=is_first_document,
+            )
+        elif args.mode == "takeaways":
+
+            past_context += example + "\n\n###Takeaways:\n"
+            
+            input_text, past_context = apply_chat_template_takeaways(
+                input_text = past_context,
+                model_name = HF_MODEL_ID,
+                append_instruction=True,
+            )
+        else:
+            raise ValueError(f"Unsupported mode: {args.mode}")
         # print("=="*100)
         # print("History: \n", input_text)
         # print("=="*100)
@@ -659,6 +607,12 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
         summary = tokenizer.decode(full_text_ids[input_len:], skip_special_tokens=True).strip()
         summaries.append(summary)
         raw = tokenizer.decode(full_text_ids[input_len:], skip_special_tokens=False)
+
+        # Update the current note for the next iteration
+        if args.mode == "notepad":
+            current_note = summary
+
+
         print(f"raw length={len(raw)} vs summary length={len(summary)}")
         print(f"Warning: raw!=summary") if raw != summary else None
         print("=" * 100)
@@ -698,10 +652,20 @@ def compute_dynamic_cache(documents: List[str]) -> Dict[str, Any]:
     print(f"Saved {len(past_key_values_dict)} document caches to {kv_path}")
 
 
-    input_text, _ = apply_chat_template(
+    if args.mode == "notepad":
+        input_text, _ = apply_chat_template_notepad(
         input_text = past_context,
         model_name = HF_MODEL_ID,
     )
+    elif args.mode == "takeaways":
+        input_text, _ = apply_chat_template_takeaways(
+            input_text = past_context,
+            model_name = HF_MODEL_ID,
+            append_instruction=True,
+        )
+    else:
+        raise ValueError(f"Unsupported mode: {args.mode}")
+    
     print("text to cache: ")
     print(input_text)
     # context_token_ids = tokenizer.encode(input_text)
@@ -755,23 +719,22 @@ def parse_args():
                         help="Directory to save precomputed cache (auto-generated if not specified)")
     parser.add_argument("--recompute", action="store_true",
                         help="Force recomputation even if cache exists")
-    
+    parser.add_argument("--mode", type=str, default="takeaways",
+                        choices=["takeaways", "notepad"], help="Mode to use for precomputation")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
-
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "9"
-
     args = parse_args()
 
-    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
     HF_MAX_NEW_TOKENS = 2048
     SUMMARY_COMPLEXTIY = args.summary_complexity
-    HF_TEMPERATURE = 0.1
+    HF_TEMPERATURE = 0.3
     HF_TOP_P = 0.95
     HF_MAX_COMPLETIONS_PER_CALL = 1
 
@@ -789,7 +752,7 @@ if __name__ == "__main__":
         "similarity_chunk_size": 2048,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
-        "rotate_keys": True,
+        "rotate_keys": False,
         "rotation_offset": 512,
     }
 
@@ -849,16 +812,16 @@ if __name__ == "__main__":
             data = json.load(f)
 
         documents = []
-        for idx, item in enumerate(data[:10]):
-            sample = (
-                f"###Problem:\n---\n{item['question']}\n---\n"
-                f"###Reasoning:\n---\n<think>\n{item['solution']}\n</think>\nThe answer is" + '\\boxed{' + f"{item['answer']}" "}\n---\n"
-            )
+        for idx, item in enumerate(data[:3]):
             # sample = (
-            #     f"###Problem:\n---\n{item['problem']}\n---\n"
-            #     f"###Reasoning:\n---\n<think>\n{item['reasoning']}\n</think>\n---\n"
-            #     f"###Solution:\n---\n{item['solution']}\n---\n"
+            #     f"###Problem:\n---\n{item['question']}\n---\n"
+            #     f"###Reasoning:\n---\n<think>\n{item['solution']}\n</think>\nThe answer is" + '\\boxed{' + f"{item['answer']}" "}\n---\n"
             # )
+            sample = (
+                f"###Problem:\n---\n{item['problem']}\n---\n"
+                f"###Reasoning:\n---\n<think>\n{item['reasoning']}\n</think>\n---\n"
+                f"###Solution:\n---\n{item['solution']}\n---\n"
+            )
             sample_len = len(TOKENIZER(sample).input_ids)
             if sample_len > 12000:
                 print(f"Sample {idx} is too long: {sample_len} tokens. Skipping.")
@@ -870,4 +833,4 @@ if __name__ == "__main__":
         if num_epochs > 1:
             documents = documents * num_epochs
 
-        dynamic_cache_metadata = compute_dynamic_cache(documents)
+        dynamic_cache_metadata = compute_dynamic_cache(documents, recompute=args.recompute)

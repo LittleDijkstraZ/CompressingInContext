@@ -388,7 +388,7 @@ def verify_preload_with_dynamic_cache_streaming(
 
 
 def apply_chat_template(input_text, model_name: str) -> str:
-    if model_name == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B":
+    if model_name == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B" or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
         eos_token = "<｜end▁of▁sentence｜>"
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
@@ -418,8 +418,6 @@ def apply_chat_template(input_text, model_name: str) -> str:
 
 if __name__ == "__main__":
     import argparse
-    # os.environ['CUDA_VISIBLE_DEVICES'] = '8'
-
 
     parser = argparse.ArgumentParser()
     parser.add_argument(

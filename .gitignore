@@ -1,5 +1,10 @@
 # Python
-__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
 # IDE
 .vscode/
 .idea/
@@ -7,3 +12,17 @@ __pycache__/
 *.swo
 *~
 .DS_Store
+
+# Data files
+data*.json
+*.csv
+
+# Log files
+*.log
+
+# Precomputed cache directories
+hf_precomputed_kv*/
+
+# Results directories
+results/
+src/clustering/limo_clustering_results/

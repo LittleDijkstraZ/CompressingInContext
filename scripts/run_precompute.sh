@@ -11,6 +11,7 @@
 # python src/pipeline/precompute_cache.py --num_epochs 1 --data_path ./limo_clustering_results/k16/clusters/cluster_6.json
 export RKV_DEBUG_COMPRESSION=1
 # python src/pipeline/precompute_cache.py --num_epochs 1 --data_path ./limo_clustering_results/k16/clusters/cluster_6.json
-python -m src.pipeline.precompute_cache --num_epochs 1 --data_path ./limo_clustering_results/k40/clusters/cluster_31.json 2>&1 | tee precompute.log
+python -m src.pipeline.precompute_cache --num_epochs 1 --data_path ./src/clustering/limo_clustering_results/k40/clusters/cluster_31.json 2>&1 | tee precompute.log
 
 # python -m src.pipeline.precompute_cache --num_epochs 1 --data_path ./data.json 2>&1 | tee precompute.log
+# python -m src.pipeline.precompute_cache_notepad --num_epochs 1 --data_path ./data_math.json --recompute 2>&1 | tee precompute.log
