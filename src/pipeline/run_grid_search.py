@@ -6,7 +6,7 @@ This script performs a grid search over one scenario:
 - Fixed summarization length, varying budget sizes and prompt complexity levels
 
 Usage:
-    python run_grid_search_new.py --budget-range 128 256 512 --complexities simple medium complex
+    python run_grid_search.py --budget-range 128 256 512 --complexities simple medium complex
 """
 
 import os
@@ -18,7 +18,7 @@ from typing import List, Tuple, Optional
 import json
 import numpy as np
 
-def run_precomputation(budget: int, max_new_tokens: int, summary_complexity: str) -> Optional[Path]:
+def run_precomputation(budget: int, max_new_tokens: int, summary_complexity: str, mode: str, num_epochs: int, data_path: str) -> Optional[Path]:
     """
     Run precomputation with given budget, max_new_tokens, and summary complexity.
 
@@ -34,25 +34,41 @@ def run_precomputation(budget: int, max_new_tokens: int, summary_complexity: str
     print(f"Running precomputation: budget={budget}, max_new_tokens={max_new_tokens}, complexity={summary_complexity}")
     print(f"{'='*80}")
 
-    PRECOMPUTED_DIR = f"cache/hf_precomputed_kv_budget_{budget}_maxlen_{max_new_tokens}_complexity_{summary_complexity}"
+    # Get script directory to resolve relative paths
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent.parent
+    
+    PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}_maxlen_{max_new_tokens}_complexity_{summary_complexity}"
+    data_path = Path(data_path)
+    
+    if not data_path.exists():
+        print(f"ERROR: Data file not found: {data_path}")
+        return None
+    
     # Run precomputation
     result = subprocess.run(
         [
-            'python', './precompute_cache.py',
+            'python', str(script_dir / 'precompute_cache.py'),
+            '--data_path', str(data_path),
             '--budget', str(budget),
             '--summary_complexity', summary_complexity,
             '--precomputed_dir', PRECOMPUTED_DIR,
+            '--num_epochs', num_epochs,
+            '--mode', mode,
         ],
         capture_output=False,
-        text=True
+        text=True,
+        cwd=str(project_root)  # Run from project root
     )
 
     if result.returncode != 0:
         print(f"WARNING: Precomputation failed for budget={budget}, max_new_tokens={max_new_tokens}, complexity={summary_complexity}")
         return None
 
-    # Expected cache directory name
-    cache_dir = Path(PRECOMPUTED_DIR)
+    # Expected cache directory name (relative to project root)
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent.parent
+    cache_dir = project_root / PRECOMPUTED_DIR
     
     if not cache_dir.exists():
         print(f"WARNING: Expected cache directory {cache_dir} not found")
@@ -64,7 +80,7 @@ def run_precomputation(budget: int, max_new_tokens: int, summary_complexity: str
 
 def run_verification(
     cache_dir: Path,
-    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    model_name: str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
     max_new_tokens: int = 8192,
     output_dir: Path = None
 ) -> Optional[Path]:
@@ -101,13 +117,19 @@ def run_verification(
 
     if output_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path(f"results/verification_{timestamp}")
+        script_dir = Path(__file__).parent
+        project_root = script_dir.parent.parent
+        output_dir = project_root / f"results/verification_{timestamp}"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / output_filename
 
+    # Get script directory to resolve relative paths
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent.parent
+    
     command = [
-        'python', './verify_preload_HF_streaming_batch.py',
+        'python', str(script_dir / 'eval_cache.py'),
         '--model_name', model_name,
         '--kv_cache_dir', str(cache_dir),
         '--max_new_tokens', str(max_new_tokens),
@@ -116,7 +138,7 @@ def run_verification(
     ]
 
     print(f"Running: {' '.join(command)}")
-    result = subprocess.run(command, capture_output=False, text=True)
+    result = subprocess.run(command, capture_output=False, text=True, cwd=str(project_root))
 
     if result.returncode != 0:
         print(f"WARNING: Verification failed for {cache_dir}")
@@ -130,9 +152,12 @@ def scenario_budget_and_complexity(
     max_new_tokens: int,
     budget_range: List[int],
     complexity_levels: List[str],
+    mode: str,
+    num_epochs: int,
+    data_path: str,
     run_verification_after: bool = True,
     verification_max_tokens: int = 8192,
-    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    model_name: str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
 ) -> List[Tuple[int, int, str, Optional[Path]]]:
     """
     Scenario: Fixed summarization length, varying budget sizes and prompt complexity.
@@ -158,7 +183,7 @@ def scenario_budget_and_complexity(
     for complexity in complexity_levels:
         print(f"\n--- Testing complexity={complexity} ---")
         for budget in budget_range:
-            cache_dir = run_precomputation(budget, max_new_tokens, complexity)
+            cache_dir = run_precomputation(budget, max_new_tokens, complexity, mode, num_epochs, data_path)
             results.append((budget, max_new_tokens, complexity, cache_dir))
             if cache_dir:
                 cache_dirs.append(cache_dir)
@@ -166,7 +191,9 @@ def scenario_budget_and_complexity(
     # Run verification on all generated caches
     if run_verification_after and cache_dirs:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = Path(f"results/scenario_verification_{timestamp}")
+        script_dir = Path(__file__).parent
+        project_root = script_dir.parent.parent
+        output_dir = project_root / f"results/scenario_verification_{timestamp}"
         print(f"\n{'='*80}")
         print(f"Running verification ({len(cache_dirs)} caches)")
         print(f"{'='*80}")
@@ -215,35 +242,40 @@ def main():
         epilog="""
 Examples:
   # Run with default ranges
-  python run_grid_search_new.py
+  python run_grid_search.py
 
   # Custom budgets and complexities
-  python run_grid_search_new.py --budget-range 128 256 512 1024 --complexities simple medium
+  python run_grid_search.py --budget-range 128 256 512 1024 --complexities simple medium
 
   # Skip verification (only precompute)
-  python run_grid_search_new.py --no-verify
+  python run_grid_search.py --no-verify
         """
     )
 
     # Scenario parameters
     parser.add_argument('--budget-range', '--s2-budget-range', nargs='+', type=int,
-                       default=np.array([64, 256, 512, 1024, 2048, 8192]) + 160 + 128,
-                       help='Budget range (default: 64 128 256 512 1024 2048 4096 8192)')
+                       default=[64 + 160 + 128, 256 + 160 + 128, 512 + 160 + 128, 
+                                1024 + 160 + 128, 2048 + 160 + 128, 8192 + 160 + 128],
+                       help='Budget range (default: 352 544 800 1312 2336 8480)')
     parser.add_argument('--complexities', '--s2-complexities', nargs='+', type=str,
                        default=["simple", "complex"],
                        help='Prompt complexity levels (default: simple medium complex)')
     parser.add_argument('--max-new-tokens', type=int, default=2048,
                        help='Max new tokens for precomputation (applied to all runs)')
-
+    parser.add_argument('--data-path', type=str, default="data_math.json",
+                       help='Path to the data file')
     # Verification parameters
     parser.add_argument('--no-verify', action='store_true',
                        help='Skip verification after precomputation')
     parser.add_argument('--verification-max-tokens', type=int, default=8192,
                        help='Max tokens for verification (default: 8192)')
     parser.add_argument('--model-name', type=str,
-                       default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+                       default="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
                        help='Model name for verification')
-
+    parser.add_argument('--mode', type=str, default="takeaways",
+                       choices=["takeaways", "notepad"], help="Mode to use for precomputation")
+    parser.add_argument('--num-epochs', type=int, default=1,
+                       help='Number of times to repeat documents')
     args = parser.parse_args()
 
     results = scenario_budget_and_complexity(
@@ -253,11 +285,16 @@ Examples:
         run_verification_after=not args.no_verify,
         verification_max_tokens=args.verification_max_tokens,
         model_name=args.model_name,
+        mode=args.mode,
+        num_epochs=args.num_epochs,
+        data_path=args.data_path,
     )
 
     # Save summary
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary_file = Path(f"results/scenario_summary_{timestamp}.json")
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent.parent
+    summary_file = project_root / f"results/scenario_summary_{timestamp}.json"
     save_grid_search_summary(results, summary_file)
 
     # Print final summary
