@@ -405,7 +405,7 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
     # stopping_tokens = ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', '\n---\n\n']
     # stopping_tokens =  ['\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
     # stopping_tokens =  ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
-    stopping_tokens =  ['---', '8. ']
+    stopping_tokens =  ['---',] 
 
 
     stop_sequences = [
@@ -556,8 +556,18 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
 
                 past_key_values = generation.past_key_values
 
+                # EXPLICIT COMPRESSION: Compress the KV cache after generation
+                # This replaces the newline-triggered compression
+                from rkv.modeling import compress_kv_cache_explicit, apply_rotation_after_generation
+                compression_applied, earliest_pos = compress_kv_cache_explicit(
+                    past_key_values,
+                    model,
+                    cache_position=None,  # Position tracking handled internally
+                )
+                if compression_applied:
+                    print(f"[EXPLICIT] Compression applied, earliest_pos={earliest_pos}")
+
                 # Apply rotation after generation completes (if needed)
-                from rkv.modeling import apply_rotation_after_generation
                 rotation_applied = apply_rotation_after_generation(past_key_values, model.config)
 
                 print("=="*100)
@@ -707,7 +717,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Precompute KV cache for documents")
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the data file")
-    parser.add_argument("--budget", type=int, default=800+80, help="KV cache budget size")
+    parser.add_argument("--budget", type=int, default=600+80, help="KV cache budget size")
     parser.add_argument("--summary_complexity", type=str, default="complex",
                         choices=["simple", "complex"], help="Summary complexity level")
     parser.add_argument("--num_epochs", type=int, default=1,
@@ -726,8 +736,8 @@ if __name__ == "__main__":
 
     args = parse_args()
 
-    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
@@ -740,7 +750,7 @@ if __name__ == "__main__":
     DEFAULT_METHOD = "rkv"
     METHOD_CONFIG = {
         "budget": args.budget,
-        "window_size": 400, # BUG: IDK why budget need to be > window_size here
+        "window_size": 300, # BUG: IDK why budget need to be > window_size here
         "kernel_size": 7,
         "mix_lambda": 0.1,
         "retain_ratio": 0.8,
@@ -752,7 +762,7 @@ if __name__ == "__main__":
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
         "rotate_keys": True,
-        "rotation_offset": 1024,
+        "rotation_offset": 3072,
     }
 
     HF_GENERATION_KWARGS = {
@@ -792,14 +802,16 @@ if __name__ == "__main__":
         # compression_config["method_config"].update(METHOD_CONFIG)
         # compression_config['divide_method'] = 'newline'
 
+        # NOTE: In this file, we use EXPLICIT compression after each generation
+        # instead of newline-triggered compression. Set divide_method to None.
         compression_config = {
             "method": DEFAULT_METHOD,
             "method_config": METHOD_CONFIG,
-            "compression": False,
+            "compression": False,  # Keep False - we call compression explicitly
             "update_kv": True,
             "compression_content": "all",
-            "divide_method": "newline",
-            "divide_length": 256,
+            "divide_method": 'step_length',  # Disable newline-triggered compression
+            "divide_length": 1000000,
         }
 
 

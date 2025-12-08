@@ -8,7 +8,7 @@
 #SBATCH --time=48:00:00
 
 python baseline_vllm.py \
-    --model_name "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B" \
+    --model_name "deepseek-ai/DeepSeek-R1-Distill-Qwen-8B" \
     --max_tokens 8192 \
     --n 32 \
-    --output_file "results/my_baseline_2.json"
+    --output_file "results/my_baseline_8b.json"

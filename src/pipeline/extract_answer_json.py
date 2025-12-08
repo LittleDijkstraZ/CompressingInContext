@@ -147,7 +147,7 @@ def main():
     """
     Main function to process all result files in the results directory.
     """
-    results_dir = Path("results")
+    results_dir = Path("results_evals")
 
     if not results_dir.exists():
         print(f"Error: Results directory '{results_dir}' not found!")
@@ -196,7 +196,7 @@ def main():
                 )
         print("-" * 80)
 
-    output_file = "extracted_answers_passk.csv"
+    output_file = "extracted_answers_passk_new.csv"
     with open(output_file, "w", encoding="utf-8") as f:
         f.write("filename,k_used,pass_at_k,correct_count,total_tryouts,boxed_count\n")
         for result in all_results:

@@ -423,7 +423,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        default="deepseek-ai/DeepSeek-R1-Distill-Qwen-8B",
     )
     parser.add_argument(
         "--kv_cache_dir",
