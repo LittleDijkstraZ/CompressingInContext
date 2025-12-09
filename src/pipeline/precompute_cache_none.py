@@ -826,6 +826,13 @@ if __name__ == "__main__":
     # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
     # HF_MODEL_ID = "PlanePaper/LEAD-7B"
     HF_MODEL_ID = args.model_name
+
+    model_shortname_dict = {
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "DS7B",
+        "PlanePaper/LEAD-7B": "LEAD7B"
+    }
+    model_shortname = model_shortname_dict[HF_MODEL_ID]
+
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
@@ -875,9 +882,9 @@ if __name__ == "__main__":
         rotate_str = ''
         if METHOD_CONFIG.get("rotate_keys", False):
             rotate_str = 'rotate_'
-        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_{args.mode}_{rotate_str}"
+        PRECOMPUTED_DIR = f"{model_shortname}_{budget}_{args.window_size}_{SUMMARY_COMPLEXTIY}_{args.mode}_{rotate_str}"
     else:
-        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
+        PRECOMPUTED_DIR = f"{model_shortname}_{budget}_{args.window_size}_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
 
     # Check if cache already exists
     metadata_path = Path(os.path.join(PRECOMPUTED_DIR, "metadata.json"))

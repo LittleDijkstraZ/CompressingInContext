@@ -10,9 +10,12 @@
 
 export RKV_DEBUG_COMPRESSION=1
 
+rotation_config = "1024"
+model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+
 # Set directories (modify these as needed)
-CACHE_DIR="${CACHE_DIR:-./kv_caches_1024}"
-RESULTS_DIR="${RESULTS_DIR:-./results_grid_search_1024}"
+CACHE_DIR=./kv_caches_${rotation_config}
+RESULTS_DIR=./results_grid_search_${rotation_config}
 
 # Create directories if they don't exist
 mkdir -p "$CACHE_DIR"
@@ -20,6 +23,7 @@ mkdir -p "$RESULTS_DIR"
 
 python -m src.pipeline.run_grid_search_none \
     --data-path ./src/clustering/similar_questions_result.json \
-    --cache-dir "$CACHE_DIR" \
-    --results-dir "$RESULTS_DIR" \
-    --rotation-configs 1024
+    --cache-dir $CACHE_DIR \
+    --results-dir $RESULTS_DIR \
+    --rotation-configs $rotation_config \
+    --model-names $model_name 

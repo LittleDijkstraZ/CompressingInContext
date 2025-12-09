@@ -206,11 +206,14 @@ def run_grid_search(
                     for rot_config in rotation_configs:
                         if rot_config == "none":
                             rotate = False
-                            target_pos = 3072  # default, ignored when rotate=False
+                            target_pos = 307200  # default, ignored when rotate=False
                         else:
                             rotate = True
                             target_pos = int(rot_config)
-
+                        if target_pos < budget:
+                            print(f"WARNING: Target position {target_pos} is less than budget {budget}, skipping")
+                            continue
+                        
                         precomputed_dir = run_precomputation(
                             model_name=model_name,
                             budget=budget,
@@ -318,9 +321,9 @@ Examples:
                        help='Modes to search over (default: takeaways notepad none)')
     # Rotation configs: "none" means no rotation, numbers mean rotate=True with that position
     parser.add_argument('--rotation-configs', nargs='+', type=str,
-                       default=["none", "256", "1024", "3072"],
-                       choices=["none", "256", "1024", "3072"],
-                       help='Rotation configurations: "none" for no rotation, or position value for rotate=True (default: none 256 1024 3072)')
+                       default=["none", "512", "2048"],
+                       choices=["none", "512", "2048"],
+                       help='Rotation configurations: "none" for no rotation, or position value for rotate=True (default: none 512 1024 2048)')
 
     # Data and output parameters
     parser.add_argument('--data-path', type=str, default="data_math.json",
