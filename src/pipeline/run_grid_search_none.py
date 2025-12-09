@@ -28,6 +28,7 @@ def run_evaluation(
     kv_cache_dir: Path,
     max_new_tokens: int = 8192,
     repeat_time: int = 16,
+    eval_results_dir: Optional[Path] = None,
 ) -> bool:
     """
     Run evaluation on a precomputed KV cache.
@@ -52,6 +53,13 @@ def run_evaluation(
         '--max_new_tokens', str(max_new_tokens),
         '--repeat_time', str(repeat_time),
     ]
+
+    # Add output file if eval_results_dir is specified
+    if eval_results_dir is not None:
+        cache_dir_name = kv_cache_dir.name
+        output_file = eval_results_dir / f"eval_{cache_dir_name}.json"
+        cmd.extend(['--output_file', str(output_file)])
+        print(f"  Evaluation results will be saved to: {output_file}", flush=True)
 
     print(f"Running: {' '.join(cmd)}", flush=True)
 
@@ -174,6 +182,7 @@ def run_grid_search(
     cache_dir: Optional[Path] = None,
     max_new_tokens: int = 8192,
     repeat_time: int = 16,
+    eval_results_dir: Optional[Path] = None,
 ) -> List[Tuple]:
     """
     Run grid search over all parameter combinations.
@@ -224,6 +233,7 @@ def run_grid_search(
                                 kv_cache_dir=precomputed_dir,
                                 max_new_tokens=max_new_tokens,
                                 repeat_time=repeat_time,
+                                eval_results_dir=eval_results_dir,
                             )
 
                         results.append((
@@ -326,7 +336,9 @@ Examples:
     parser.add_argument('--cache-dir', type=str, default=None,
                        help='Directory to store precomputed KV caches')
     parser.add_argument('--results-dir', type=str, default=None,
-                       help='Directory to store results summary')
+                       help='Directory to store grid search summary')
+    parser.add_argument('--eval-results-dir', type=str, default=None,
+                       help='Directory to store evaluation results (default: same as --results-dir)')
 
     # Evaluation parameters
     parser.add_argument('--max-new-tokens', type=int, default=8192,
@@ -339,6 +351,11 @@ Examples:
     # Convert directory arguments to Path objects if provided
     cache_dir = Path(args.cache_dir) if args.cache_dir else None
     results_dir = Path(args.results_dir) if args.results_dir else None
+    eval_results_dir = Path(args.eval_results_dir) if args.eval_results_dir else results_dir
+
+    # Create eval_results_dir if specified
+    if eval_results_dir is not None:
+        eval_results_dir.mkdir(parents=True, exist_ok=True)
 
     results = run_grid_search(
         model_names=args.model_names,
@@ -353,6 +370,7 @@ Examples:
         cache_dir=cache_dir,
         max_new_tokens=args.max_new_tokens,
         repeat_time=args.repeat_time,
+        eval_results_dir=eval_results_dir,
     )
 
     # Save summary
