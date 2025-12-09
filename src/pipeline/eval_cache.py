@@ -18,6 +18,8 @@ from .utils import PatchedDynamicCache
 from .precompute_cache import DynamicCacheWithCustomizedLength
 
 
+supported_models = ["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "PlanePaper/LEAD-7B"]
+
 def load_precomputed_kv_as_dynamic_cache(
     kv_path: str,
     doc_id: Optional[int] = None,
@@ -388,7 +390,7 @@ def verify_preload_with_dynamic_cache_streaming(
 
 
 def apply_chat_template(input_text, model_name: str) -> str:
-    if model_name == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B" or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
+    if model_name in supported_models:  
         eos_token = "<｜end▁of▁sentence｜>"
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
@@ -423,7 +425,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        default="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+
     )
     parser.add_argument(
         "--kv_cache_dir",
@@ -453,15 +456,12 @@ if __name__ == "__main__":
         help="Number of times to repeat the generation."
     )
     import datetime
-    time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     parser.add_argument(
         "--output_file",
         type=str,
         default=None,
         help="File to save the results to. If not provided, results/ will be used."
     )
-
-
 
     args = parser.parse_args()
 
@@ -491,15 +491,8 @@ if __name__ == "__main__":
     else:
         results_dir = Path("results")
         budget, max_len = None, None
-        # try:
-        #     parts = args.kv_cache_dir.split('_')
-        #     budget = int(parts[4])
-        #     complexity = str(parts[6])
-        # except (IndexError, ValueError):
-        #     pass
-
         name_stem = args.kv_cache_dir.split('kv')[-1]
-        result_filename = f"results_{name_stem}_{time_stamp}.json"
+        result_filename = f"results_{name_stem}.json"
 
         output_path = results_dir / result_filename
 

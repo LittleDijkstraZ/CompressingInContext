@@ -164,7 +164,7 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
         replace_llama(compression_config)
     elif "qwen3" in lower_name:
         replace_qwen3(compression_config)
-    elif "qwen" in lower_name:
+    elif "qwen" in lower_name or "lead" in lower_name:
         replace_qwen2(compression_config)
     else:
         raise ValueError(f"Unsupported model for R-KV patch: {HF_MODEL_ID}")
@@ -341,10 +341,33 @@ def apply_chat_template_notepad(input_text, model_name: str, append_instruction=
     return generation_prompt, input_text
 
 
+
+def apply_chat_template_none(input_text, model_name: str) -> str:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B' or model_name == 'PlanePaper/LEAD-7B':
+        bos = "<｜begin▁of▁sentence｜>"
+        user_token = "<｜User｜>"
+        assistant_token = "<｜Assistant｜>"
+        # think_end_think = "<think>\n</think>"
+        think_end_think = "<think>\nOkey, my learning begins:"
+
+    else:
+        raise ValueError(f"Unsupported model for chat template: {model_name}")
+
+    prompt = (
+        "You are currently learning from some examples, which will later help you to solve similar problems. "
+        "Given the problem, reasoning, and solution, you will try to learn how to solve such problems on your own, "
+        "think about the key takeaways that can help you solve similar problems in the future. "
+    )
+
+    generation_prompt = f"""{bos}{user_token}{prompt}{assistant_token}{think_end_think}{input_text}"""
+    return generation_prompt, input_text
+
 class DynamicCacheWithCustomizedLength(DynamicCache):
     def __init__(self, ):
         super().__init__()
         self._rotation_enabled = False  # Flag to indicate if rotation has been applied
+        # Manual absolute position tracking for layer 0 (fallback when HF cache_position is missing)
+        self._manual_positions_layer0 = None
 
     def get_seq_length(self, layer_idx: Optional[int] = 0):
         return self._seen_tokens
@@ -379,6 +402,24 @@ class DynamicCacheWithCustomizedLength(DynamicCache):
                 print(f"[CACHE UPDATE] Layer 0: Correcting _seen_tokens: {self._seen_tokens} -> {expected_seen_tokens} (added {new_tokens} tokens, rotation_enabled={self._rotation_enabled})")
             self._seen_tokens = expected_seen_tokens
 
+        # Manual absolute position tracking: cache index -> position id
+        # This is a fallback when HF cache_position is missing downstream.
+        # Track only on layer 0 (shared length for all layers).
+        if layer_idx == 0 and hasattr(self, "_seen_tokens"):
+            current_seen_tokens = self._seen_tokens
+            cache_len = key_states.shape[-2]
+            # Positions of tokens just added for layer 0
+            new_positions = torch.arange(
+                current_seen_tokens - cache_len,
+                current_seen_tokens,
+                device=key_states.device,
+                dtype=torch.long,
+            )
+            if self._manual_positions_layer0 is None:
+                self._manual_positions_layer0 = new_positions
+            else:
+                self._manual_positions_layer0 = torch.cat([self._manual_positions_layer0, new_positions], dim=0)
+
         return result
 
 
@@ -405,7 +446,7 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
     # stopping_tokens = ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', '\n---\n\n']
     # stopping_tokens =  ['\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
     # stopping_tokens =  ['---', '\n\n---\n\n', '\n\n---\n', '.\n\n---\n\n', '\n---\n', ]
-    stopping_tokens =  ['---', '8. ']
+    stopping_tokens =  ['---',] 
 
 
     stop_sequences = [
@@ -450,6 +491,14 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
                 model_name = HF_MODEL_ID,
                 append_instruction=True,
             )
+        elif args.mode == "none":
+
+            past_context += example + "\n"
+            input_text, past_context = apply_chat_template_none(
+                input_text = past_context,
+                model_name = HF_MODEL_ID,
+            )
+
         else:
             raise ValueError(f"Unsupported mode: {args.mode}")
         # print("=="*100)
@@ -556,8 +605,19 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
 
                 past_key_values = generation.past_key_values
 
+                # EXPLICIT COMPRESSION: Compress the KV cache after generation
+                # This replaces the newline-triggered compression
+                from rkv.modeling import compress_kv_cache_explicit, apply_rotation_after_generation
+                compression_applied, earliest_pos = compress_kv_cache_explicit(
+                    past_key_values,
+                    model,
+                    cache_position=None,  # Position tracking handled internally via kv_cluster._position_ids
+                    require_positions=True,  # Fail fast if positions are missing
+                )
+                if compression_applied:
+                    print(f"[EXPLICIT] Compression applied, earliest_pos={earliest_pos}")
+
                 # Apply rotation after generation completes (if needed)
-                from rkv.modeling import apply_rotation_after_generation
                 rotation_applied = apply_rotation_after_generation(past_key_values, model.config)
 
                 print("=="*100)
@@ -653,12 +713,18 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
         input_text, _ = apply_chat_template_notepad(
         input_text = past_context,
         model_name = HF_MODEL_ID,
+        append_instruction=True,
     )
     elif args.mode == "takeaways":
         input_text, _ = apply_chat_template_takeaways(
             input_text = past_context,
             model_name = HF_MODEL_ID,
             append_instruction=True,
+        )
+    elif args.mode == "none":
+        input_text, _ = apply_chat_template_none(
+            input_text = past_context,
+            model_name = HF_MODEL_ID,
         )
     else:
         raise ValueError(f"Unsupported mode: {args.mode}")
@@ -707,7 +773,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Precompute KV cache for documents")
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the data file")
-    parser.add_argument("--budget", type=int, default=800+80, help="KV cache budget size")
+    parser.add_argument("--budget", type=int, default=600+80, help="KV cache budget size")
     parser.add_argument("--summary_complexity", type=str, default="complex",
                         choices=["simple", "complex"], help="Summary complexity level")
     parser.add_argument("--num_epochs", type=int, default=1,
@@ -717,7 +783,9 @@ def parse_args():
     parser.add_argument("--recompute", action="store_true",
                         help="Force recomputation even if cache exists")
     parser.add_argument("--mode", type=str, default="takeaways",
-                        choices=["takeaways", "notepad"], help="Mode to use for precomputation")
+                        choices=["takeaways", "notepad", "none"], help="Mode to use for precomputation")    
+    parser.add_argument("--window_size", type=int, default=128,
+                        help="Window size for compression")
     return parser.parse_args()
 
 
@@ -725,11 +793,12 @@ if __name__ == "__main__":
     args = parse_args()
 
     # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    HF_MODEL_ID = "PlanePaper/LEAD-7B"
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
-    HF_MAX_NEW_TOKENS = 2048
+    HF_MAX_NEW_TOKENS = 1
     SUMMARY_COMPLEXTIY = args.summary_complexity
     HF_TEMPERATURE = 0.1
     HF_TOP_P = 0.95
@@ -738,7 +807,7 @@ if __name__ == "__main__":
     DEFAULT_METHOD = "rkv"
     METHOD_CONFIG = {
         "budget": args.budget,
-        "window_size": 400, # BUG: IDK why budget need to be > window_size here
+        "window_size": args.window_size, # BUG: IDK why budget need to be > window_size here
         "kernel_size": 7,
         "mix_lambda": 0.1,
         "retain_ratio": 0.8,
@@ -750,7 +819,7 @@ if __name__ == "__main__":
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
         "rotate_keys": True,
-        "target_rotation_position": 1024,
+        "target_rotation_position": 3072,
     }
 
     HF_GENERATION_KWARGS = {
@@ -771,9 +840,13 @@ if __name__ == "__main__":
     if args.precomputed_dir:
         PRECOMPUTED_DIR = args.precomputed_dir
     elif num_epochs == 1:
-        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}_comp_{SUMMARY_COMPLEXTIY}"
+        # Add 'rotate' to the dir name if rotate_keys is True
+        rotate_str = ''
+        if METHOD_CONFIG.get("rotate_keys", False):
+            rotate_str = 'rotate_'
+        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_{args.mode}_{rotate_str}"
     else:
-        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}_comp_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
+        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
 
     # Check if cache already exists
     metadata_path = Path(os.path.join(PRECOMPUTED_DIR, "metadata.json"))
@@ -790,14 +863,16 @@ if __name__ == "__main__":
         # compression_config["method_config"].update(METHOD_CONFIG)
         # compression_config['divide_method'] = 'newline'
 
+        # NOTE: In this file, we use EXPLICIT compression after each generation
+        # instead of newline-triggered compression. Set divide_method to None.
         compression_config = {
             "method": DEFAULT_METHOD,
             "method_config": METHOD_CONFIG,
-            "compression": False,
+            "compression": False,  # Keep False - we call compression explicitly
             "update_kv": True,
             "compression_content": "all",
-            "divide_method": "newline",
-            "divide_length": 256,
+            "divide_method": 'step_length',  # Disable newline-triggered compression
+            "divide_length": 1000000,
         }
 
 
@@ -809,7 +884,7 @@ if __name__ == "__main__":
             data = json.load(f)
 
         documents = []
-        for idx, item in enumerate(data[:20]):
+        for idx, item in enumerate(data[:3]):
             if 'question' in item:
                 sample = (
                     f"###Problem:\n---\n{item['question']}\n---\n"

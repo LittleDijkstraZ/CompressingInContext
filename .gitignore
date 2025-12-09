@@ -24,5 +24,5 @@ data*.json
 hf_precomputed_kv*/
 
 # Results directories
-results/
+results*/
 src/clustering/limo_clustering_results/

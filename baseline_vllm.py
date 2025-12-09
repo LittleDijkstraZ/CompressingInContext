@@ -1,6 +1,7 @@
 """
 Baseline vLLM evaluation script.
 Runs model inference on a problem without any memory/compression.
+This is the baseline method that does NOT use any precomputed KV cache.
 """
 import json
 import datetime
@@ -11,27 +12,51 @@ from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
 
+def apply_chat_template(input_text: str, model_name: str, tokenizer) -> str:
+    """
+    Apply chat template for baseline: directly ask the model to solve the problem.
+    Uses standard messages format with "Let's think step by step" instruction.
+    """
+    # Create messages in the format: [{"role": "user", "content": question + instruction}]
+    messages = [
+        {
+            "role": "user",
+            "content": input_text + "\nLet's think step by step and output the final answer within \\boxed{}."
+        }
+    ]
+    
+    # Use tokenizer's chat template
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    
+    return prompt
+
+
 def run_baseline_vllm(
-    model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    model_name: str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
     problem: str = None,
-    max_tokens: int = 8192,
-    n: int = 1,
+    max_new_tokens: int = 8192,
+    repeat_time: int = 1,
     temperature: float = 0.6,
     top_p: float = 0.95,
 ) -> Dict[str, Any]:
     """
-    Run baseline vLLM inference on a problem.
+    Run baseline vLLM inference on a problem WITHOUT any precomputed KV cache.
+    This is the baseline method that directly generates without any context compression.
 
     Args:
         model_name: HuggingFace model name
         problem: The problem text to solve
-        max_tokens: Maximum number of tokens to generate
-        n: Number of output sequences to generate (equivalent to repeat_time)
+        max_new_tokens: Maximum number of tokens to generate
+        repeat_time: Number of output sequences to generate
         temperature: Sampling temperature
         top_p: Top-p sampling parameter
 
     Returns:
-        Dictionary containing generation results
+        Dictionary containing generation results (same format as eval_cache.py)
     """
     print(f"\nLoading tokenizer: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -39,13 +64,8 @@ def run_baseline_vllm(
         trust_remote_code=True,
     )
 
-    # Format the problem using the tokenizer's chat template
-    messages = [{"role": "user", "content": problem}]
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
+    # Format the problem using chat template (no think tags, just problem + boxed requirement)
+    prompt = apply_chat_template(problem, model_name, tokenizer)
     print(f"\nFormatted prompt:\n{prompt[:500]}...")
 
     # Get stop token IDs
@@ -66,8 +86,8 @@ def run_baseline_vllm(
     sampling_params = SamplingParams(
         temperature=temperature,
         top_p=top_p,
-        max_tokens=max_tokens,
-        n=n,
+        max_tokens=max_new_tokens,
+        n=repeat_time,
         stop_token_ids=stop_token_ids if stop_token_ids else None,
     )
 
@@ -78,7 +98,8 @@ def run_baseline_vllm(
         dtype="bfloat16",
     )
 
-    print(f"\nGenerating {n} sample(s) with max_tokens={max_tokens}...")
+    print(f"\nGenerating {repeat_time} sample(s) with max_new_tokens={max_new_tokens}...")
+    print("NOTE: This is the BASELINE method - no precomputed KV cache is used.")
     outputs = llm.generate([prompt], sampling_params)
 
     # Process outputs
@@ -93,9 +114,9 @@ def run_baseline_vllm(
         output_length = input_length + len(output.token_ids)
 
         print(f"\n{'=' * 80}")
-        print(f"Generation {idx + 1}/{n}")
+        print(f"Generate {idx + 1}/{repeat_time}")
         print("=" * 80)
-        print(f"\nResponse:\n{response[:1000]}...")
+        print(f"\nFull output:\n{generated_text}")
 
         all_results.append({
             "generated_text": generated_text,
@@ -107,7 +128,7 @@ def run_baseline_vllm(
 
     return {
         "all_generations": all_results,
-        "num_repeats": n,
+        "num_repeats": repeat_time,
         "streamed_chunks": [],  # No streaming in vLLM offline mode
     }
 
@@ -115,22 +136,23 @@ def run_baseline_vllm(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Baseline vLLM evaluation")
+    parser = argparse.ArgumentParser(description="Baseline vLLM evaluation (no KV cache)")
     parser.add_argument(
         "--model_name",
         type=str,
-        default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        default="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
     )
     parser.add_argument(
-        "--max_tokens",
+        "--max_new_tokens",
         type=int,
         default=8192,
+        help="Maximum number of new tokens to generate",
     )
     parser.add_argument(
-        "--n",
+        "--repeat_time",
         type=int,
         default=1,
-        help="Number of output sequences to generate (equivalent to repeat_time).",
+        help="Number of times to repeat the generation.",
     )
     parser.add_argument(
         "--problem",
@@ -138,15 +160,15 @@ if __name__ == "__main__":
         default=None,
         help="The problem to solve.",
     )
-    time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     parser.add_argument(
         "--output_file",
         type=str,
         default=None,
-        help="File to save the results to. Defaults to results/baseline_{timestamp}.json",
+        help="File to save the results to. If not provided, results/baseline_*.json will be used.",
     )
 
     args = parser.parse_args()
+    args.model_name = "PlanePaper/LEAD-7B"
 
     if args.problem is None:
         args.problem = (
@@ -156,12 +178,13 @@ if __name__ == "__main__":
             "through $F$, and let $N$ be the reflection of $G$ through $E$. Quadrilateral $DEGF$ has "
             "area 288. Find the area of heptagon $AFNBCEM$."
         )
+        # args.problem = ""
 
     results = run_baseline_vllm(
         model_name=args.model_name,
         problem=args.problem,
-        max_tokens=args.max_tokens,
-        n=args.n,
+        max_new_tokens=args.max_new_tokens,
+        repeat_time=args.repeat_time,
     )
 
     # Save results
@@ -170,6 +193,7 @@ if __name__ == "__main__":
     else:
         results_dir = Path("results")
         results_dir.mkdir(parents=True, exist_ok=True)
+        time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = results_dir / f"baseline_{time_stamp}.json"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
