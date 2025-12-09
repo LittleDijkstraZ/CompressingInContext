@@ -22,7 +22,7 @@ from transformers import (
 from rkv.config import get_compression_config
 from rkv.monkeypatch import replace_llama, replace_qwen2, replace_qwen3
 
-
+supported_models = ["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "PlanePaper/LEAD-7B"]
 
 
 class TqdmProgress(StoppingCriteria):
@@ -224,14 +224,12 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
 
 
 def apply_chat_template_takeaways(input_text, model_name: str, append_instruction=False) -> str:
-    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
+    if model_name in supported_models:  
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
         # think_end_think = "<think>\n</think>"
-        think_end_think = "<think>\nOkey, my learning begins:"
-
-    
+        think_end_think = "<think>\nOkey, my learning begins:\n"
     else:
         raise ValueError(f"Unsupported model for chat template: {model_name}")
     
@@ -278,12 +276,12 @@ def apply_chat_template_takeaways(input_text, model_name: str, append_instructio
 
 
 def apply_chat_template_notepad(input_text, model_name: str, append_instruction=False, is_first_document=True) -> str:
-    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
+    if model_name in supported_models:  
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
         # think_end_think = "<think>\n</think>"
-        think_end_think = "<think>\nOkey, my learning begins:"
+        think_end_think = "<think>\nOkey, my learning begins:\n"
 
     else:
         raise ValueError(f"Unsupported model for chat template: {model_name}")
@@ -343,12 +341,12 @@ def apply_chat_template_notepad(input_text, model_name: str, append_instruction=
 
 
 def apply_chat_template_none(input_text, model_name: str) -> str:
-    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B' or model_name == 'PlanePaper/LEAD-7B':
+    if model_name in supported_models:  
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
         # think_end_think = "<think>\n</think>"
-        think_end_think = "<think>\nOkey, my learning begins:"
+        think_end_think = "<think>\nOkey, my learning begins:\n"  
 
     else:
         raise ValueError(f"Unsupported model for chat template: {model_name}")
@@ -788,7 +786,7 @@ def parse_args():
     parser.add_argument("--rotate", type=lambda x: x.lower() == 'true', default=False,
                         help="Rotate keys, default is False")
     parser.add_argument("--target_rotation_position", type=int, default=3072,
-                        choices=[256, 1024, 3072,],
+                        # choices=[256, 1024, 3072,],
                         help="Target rotation position, default is 3072")
     
     

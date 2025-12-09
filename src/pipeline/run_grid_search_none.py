@@ -142,6 +142,7 @@ def run_precomputation(
         '--num_epochs', str(num_epochs),
         '--window_size', str(window_size),
         '--precomputed_dir', str(precomputed_path),
+        '--recompute',
     ]
 
     print(f"Running: {' '.join(cmd)}", flush=True)
@@ -213,7 +214,7 @@ def run_grid_search(
                         if target_pos < budget:
                             print(f"WARNING: Target position {target_pos} is less than budget {budget}, skipping")
                             continue
-                        
+
                         precomputed_dir = run_precomputation(
                             model_name=model_name,
                             budget=budget,
