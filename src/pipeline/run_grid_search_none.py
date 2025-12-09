@@ -23,6 +23,57 @@ from typing import List, Tuple, Optional
 import json
 
 
+def run_evaluation(
+    model_name: str,
+    kv_cache_dir: Path,
+    max_new_tokens: int = 8192,
+    repeat_time: int = 16,
+) -> bool:
+    """
+    Run evaluation on a precomputed KV cache.
+
+    Returns:
+        True if evaluation succeeded, False otherwise
+    """
+    print(f"\n{'='*80}", flush=True)
+    print(f"Running evaluation: model={model_name}, cache_dir={kv_cache_dir}", flush=True)
+    print(f"  max_new_tokens={max_new_tokens}, repeat_time={repeat_time}", flush=True)
+    print(f"{'='*80}", flush=True)
+
+    # Get script directory to resolve relative paths
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent.parent
+
+    # Build command
+    cmd = [
+        'python', '-m', 'src.pipeline.eval_cache',
+        '--model_name', model_name,
+        '--kv_cache_dir', str(kv_cache_dir),
+        '--max_new_tokens', str(max_new_tokens),
+        '--repeat_time', str(repeat_time),
+    ]
+
+    print(f"Running: {' '.join(cmd)}", flush=True)
+
+    # Run evaluation - use unbuffered output
+    env = os.environ.copy()
+    env['PYTHONUNBUFFERED'] = '1'
+    result = subprocess.run(
+        cmd,
+        capture_output=False,
+        text=True,
+        cwd=str(project_root),
+        env=env,
+    )
+
+    if result.returncode != 0:
+        print(f"WARNING: Evaluation failed for cache_dir={kv_cache_dir}")
+        return False
+
+    print(f"✓ Evaluation completed: {kv_cache_dir}")
+    return True
+
+
 def run_precomputation(
     model_name: str,
     budget: int,
@@ -121,6 +172,8 @@ def run_grid_search(
     window_size: int,
     num_epochs: int,
     cache_dir: Optional[Path] = None,
+    max_new_tokens: int = 8192,
+    repeat_time: int = 16,
 ) -> List[Tuple]:
     """
     Run grid search over all parameter combinations.
@@ -162,9 +215,20 @@ def run_grid_search(
                             num_epochs=num_epochs,
                             cache_dir=cache_dir,
                         )
+
+                        # Run evaluation if precomputation succeeded
+                        eval_success = False
+                        if precomputed_dir is not None:
+                            eval_success = run_evaluation(
+                                model_name=model_name,
+                                kv_cache_dir=precomputed_dir,
+                                max_new_tokens=max_new_tokens,
+                                repeat_time=repeat_time,
+                            )
+
                         results.append((
                             model_name, budget, data_limit, mode,
-                            rotate, target_pos, precomputed_dir
+                            rotate, target_pos, precomputed_dir, eval_success
                         ))
 
     return results
@@ -175,8 +239,10 @@ def save_grid_search_summary(results: List[Tuple], output_file: Path):
     summary = {
         "timestamp": datetime.now().isoformat(),
         "total_runs": len(results),
-        "successful_runs": sum(1 for *_, cache_dir in results if cache_dir is not None),
-        "failed_runs": sum(1 for *_, cache_dir in results if cache_dir is None),
+        "successful_precompute": sum(1 for *_, cache_dir, _ in results if cache_dir is not None),
+        "failed_precompute": sum(1 for *_, cache_dir, _ in results if cache_dir is None),
+        "successful_eval": sum(1 for *_, eval_success in results if eval_success),
+        "failed_eval": sum(1 for *_, cache_dir, eval_success in results if cache_dir is not None and not eval_success),
         "configurations": [
             {
                 "model_name": model_name,
@@ -186,9 +252,10 @@ def save_grid_search_summary(results: List[Tuple], output_file: Path):
                 "rotate": rotate,
                 "target_rotation_position": target_pos,
                 "cache_dir": str(cache_dir) if cache_dir else None,
-                "success": cache_dir is not None
+                "precompute_success": cache_dir is not None,
+                "eval_success": eval_success
             }
-            for model_name, budget, data_limit, mode, rotate, target_pos, cache_dir in results
+            for model_name, budget, data_limit, mode, rotate, target_pos, cache_dir, eval_success in results
         ]
     }
 
@@ -261,6 +328,12 @@ Examples:
     parser.add_argument('--results-dir', type=str, default=None,
                        help='Directory to store results summary')
 
+    # Evaluation parameters
+    parser.add_argument('--max-new-tokens', type=int, default=8192,
+                       help='Maximum new tokens for evaluation (default: 8192)')
+    parser.add_argument('--repeat-time', type=int, default=16,
+                       help='Number of times to repeat generation for evaluation (default: 16)')
+
     args = parser.parse_args()
 
     # Convert directory arguments to Path objects if provided
@@ -278,6 +351,8 @@ Examples:
         window_size=args.window_size,
         num_epochs=args.num_epochs,
         cache_dir=cache_dir,
+        max_new_tokens=args.max_new_tokens,
+        repeat_time=args.repeat_time,
     )
 
     # Save summary
@@ -295,8 +370,10 @@ Examples:
     print("GRID SEARCH COMPLETED")
     print("="*80)
     print(f"Total configurations tested: {len(results)}")
-    print(f"Successful: {sum(1 for *_, cache_dir in results if cache_dir is not None)}")
-    print(f"Failed: {sum(1 for *_, cache_dir in results if cache_dir is None)}")
+    print(f"Successful precomputation: {sum(1 for *_, cache_dir, _ in results if cache_dir is not None)}")
+    print(f"Failed precomputation: {sum(1 for *_, cache_dir, _ in results if cache_dir is None)}")
+    print(f"Successful evaluation: {sum(1 for *_, eval_success in results if eval_success)}")
+    print(f"Failed evaluation: {sum(1 for *_, cache_dir, eval_success in results if cache_dir is not None and not eval_success)}")
     print("="*80)
 
 
