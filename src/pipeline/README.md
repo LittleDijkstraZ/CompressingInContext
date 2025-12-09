@@ -21,9 +21,11 @@
   - 支持旋转和基于窗口的压缩
   - 使用明确的压缩调用
 
-- **`precompute_cache_none.py`**：带压缩模式的预计算脚本
+- **`precompute_cache_none.py`**：带压缩模式的预计算脚本（支持旋转）
   - 支持 `takeaways`、`notepad` 和 `none` 三种模式
   - `none` 模式：直接处理文档，不生成摘要
+  - 支持键旋转功能（`--rotate`）
+  - 可限制处理的文档数量（`--data_limit`）
 
 - **`precompute_cache.py`**：基础预计算脚本
   - 标准预计算流程
@@ -92,9 +94,44 @@ python -m src.pipeline.precompute_cache_comp \
 - `--window_size`：压缩窗口大小（默认：128）
 - `--recompute`：即使缓存存在也强制重新计算
 
-### 2. 预计算（无压缩）
+### 2. 预计算（支持旋转和压缩）
 
-使用 `none` 模式，不生成摘要，直接处理文档：
+使用 `precompute_cache_none.py`，支持旋转和压缩：
+
+```bash
+python -m src.pipeline.precompute_cache_none \
+    --data_path ./clusteringxx.json \
+    --model_name PlanePaper/LEAD-7B \
+    --budget 588 \
+    --mode none \
+    --window_size 128 \
+    --data_limit 3 \
+    --rotate False \
+    --target_rotation_position 3072 \
+    --num_epochs 1 \
+    --precomputed_dir hf_precomputed_kv_budget_588_none \
+    --recompute
+```
+
+**关键参数：**
+- `--data_path`：**必需**，数据文件路径
+- `--model_name`：**必需**，模型名称（如 `PlanePaper/LEAD-7B`）
+- `--budget`：KV 缓存预算大小（默认：680）
+- `--mode`：学习模式（`takeaways`、`notepad` 或 `none`）
+- `--window_size`：压缩窗口大小（默认：128）
+- `--data_limit`：限制处理的文档数量（默认：3）
+- `--rotate`：是否启用键旋转（默认：False）
+- `--target_rotation_position`：目标旋转位置（默认：3072）
+- `--num_epochs`：重复文档的次数（默认：1）
+- `--precomputed_dir`：预计算缓存保存目录（可选，未指定则自动生成）
+- `--recompute`：即使缓存存在也强制重新计算
+- `--summary_complexity`：摘要复杂度级别（`simple` 或 `complex`，默认：complex）
+
+**注意：**
+- `--model_name` 是必需参数，必须通过命令行指定（如 `PlanePaper/LEAD-7B`）
+- 使用 `--rotate True` 启用键旋转功能（需要 `target_rotation_position` 配合）
+- `--data_limit` 可以限制处理的文档数量，便于快速测试
+- 与 `precompute_cache_comp.py` 不同，此脚本支持通过参数指定模型名称
 
 ### 3. 评估
 
@@ -102,8 +139,9 @@ python -m src.pipeline.precompute_cache_comp \
 
 ```bash
 python -m src.pipeline.eval_cache \
-    --model_name xx \
+    --model_name deepseek-ai/DeepSeek-R1-0528-Qwen3-8B \
     --kv_cache_dir hf_precomputed_kv_budget_680_complex_takeaways \
+    --max_new_tokens 8192 \
     --repeat_time 16 \
     --follow_up_prompt "你的问题 here"
 ```
@@ -224,12 +262,12 @@ METHOD_CONFIG = {
 - **适用场景**：需要维护统一的知识表示
 
 ### None 模式
-- **描述**：直接处理文档，不生成摘要
+- **描述**：直接处理文档，不生成摘要或笔记
 - **特点**：
   - 不进行摘要生成
   - 直接处理原始文档内容
-  - 适用于需要完整上下文的场景
-- **适用场景**：需要完整文档信息，不需要压缩或摘要
+  - 可以使用压缩和旋转
+- **适用场景**：需要完整文档信息但需要压缩存储的场景
 
 ## 输出格式
 
@@ -290,8 +328,40 @@ result_1.json,588,True,True,1.0,...
 
 ### 完整流程
 
+**使用 precompute_cache_none.py（推荐，支持更多参数）：**
+
 ```bash
-# 1. 预计算 KV 缓存
+# 1. 预计算 KV 缓存（带旋转和压缩）
+python -m src.pipeline.precompute_cache_none \
+    --data_path data_math.json \
+    --model_name PlanePaper/LEAD-7B \
+    --budget 588 \
+    --mode none \
+    --window_size 128 \
+    --data_limit 3 \
+    --rotate False \
+    --precomputed_dir cache_588_none \
+    --recompute
+
+# 2. 评估多个问题
+python -m src.pipeline.eval_cache \
+    --model_name PlanePaper/LEAD-7B \
+    --kv_cache_dir cache_588_none \
+    --max_new_tokens 8192 \
+    --repeat_time 16 \
+    --output_file results/result_588.json
+
+# 3. 提取答案并计算指标
+python -m src.pipeline.extract_answer_json \
+    --input_dir results/ \
+    --output_csv answers_588.csv \
+    --ground_truth data_math.json
+```
+
+**使用 precompute_cache_comp.py：**
+
+```bash
+# 1. 预计算 KV 缓存（需要先修改脚本中的模型名称）
 python -m src.pipeline.precompute_cache_comp \
     --data_path data_math.json \
     --budget 680 \
@@ -348,7 +418,12 @@ python -m src.pipeline.run_grid_search \
 5. **模式选择**
    - `takeaways`：适合需要明确要点提取的场景
    - `notepad`：适合需要统一知识表示的场景
-   - `none`：适合需要完整上下文的场景
+   - `none`：适合需要完整文档信息但需要压缩的场景
+
+6. **脚本选择**
+   - `precompute_cache_none.py`：推荐使用，支持更多参数（模型名称、旋转、数据限制等），通过 `--model_name` 指定模型
+   - `precompute_cache_comp.py`：模型名称硬编码在脚本中，需要修改脚本中的 `HF_MODEL_ID` 变量
+   - 两者都支持压缩，但 `precompute_cache_none.py` 功能更灵活
 
 6. **性能优化**
    - 首次运行会编译 torch graph，耗时较长
