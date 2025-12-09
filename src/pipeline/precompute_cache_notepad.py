@@ -556,7 +556,7 @@ if __name__ == "__main__":
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
         "rotate_keys": False,
-        "rotation_offset": 512,
+        "target_rotation_position": 512,
     }
 
     HF_GENERATION_KWARGS = {
