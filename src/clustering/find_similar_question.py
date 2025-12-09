@@ -105,6 +105,7 @@ def find_most_similar_questions(query_question, train_data, embeddings, model, d
             results.append({
                 'index': int(idx),
                 'question': train_data[int(idx)]['question'],
+                'solution': train_data[int(idx)]['solution'],
                 'answer': train_data[int(idx)]['answer'],
                 'similarity': float(similarities[idx])
             })
@@ -120,6 +121,7 @@ def find_most_similar_questions(query_question, train_data, embeddings, model, d
             results.append({
                 'index': int(idx),
                 'question': train_data[int(idx)]['question'],
+                'solution': train_data[int(idx)]['solution'],   
                 'answer': train_data[int(idx)]['answer'],
                 'distance': float(distances[idx])
             })
@@ -247,6 +249,7 @@ def save_results_to_json(results, output_path):
         {
             'index': result['index'],
             'question': result['question'],
+            'solution': result['solution'],
             'answer': result['answer']
         }
         for result in results
