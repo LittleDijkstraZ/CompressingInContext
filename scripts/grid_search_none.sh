@@ -10,8 +10,9 @@
 
 export RKV_DEBUG_COMPRESSION=1
 
-rotation_config = "1024"
-model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+rotation_config="none"
+model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+# model_name="PlanePaper/LEAD-7B"
 
 # Set directories (modify these as needed)
 CACHE_DIR=./kv_caches_${rotation_config}
@@ -25,5 +26,6 @@ python -m src.pipeline.run_grid_search_none \
     --data-path ./src/clustering/similar_questions_result.json \
     --cache-dir $CACHE_DIR \
     --results-dir $RESULTS_DIR \
-    --rotation-configs $rotation_config \
-    --model-names $model_name 
+    --rotation-configs ${rotation_config} \
+    --model-names ${model_name} \
+    --data-limits 5

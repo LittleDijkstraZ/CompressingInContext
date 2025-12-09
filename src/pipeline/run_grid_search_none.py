@@ -111,9 +111,16 @@ def run_precomputation(
     project_root = script_dir.parent.parent
 
     rotate_str = "rotate_" if rotate else ""
+
+    model_shortname_dict = {
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "DS7B",
+        "PlanePaper/LEAD-7B": "LEAD7B"
+    }
+    model_shortName = model_shortname_dict[model_name]
+
     PRECOMPUTED_DIR_NAME = (
-        f"hf_precomputed_kv_budget_{budget}_window_{window_size}_comp_{summary_complexity}"
-        f"_{mode}_{rotate_str}data_{data_limit}"
+        f"{model_shortName}_{budget}_window_{window_size}_comp_{summary_complexity}"
+        f"_{mode}_{rotate_str}_data_{data_limit}"
     )
     if cache_dir is not None:
         precomputed_path = cache_dir / PRECOMPUTED_DIR_NAME
@@ -306,7 +313,6 @@ Examples:
     # Model parameters
     parser.add_argument('--model-names', nargs='+', type=str,
                        default=["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "PlanePaper/LEAD-7B"],
-                       choices=["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "PlanePaper/LEAD-7B"],
                        help='Models to test')
 
     # Grid search parameters
