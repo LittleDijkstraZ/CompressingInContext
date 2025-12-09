@@ -773,6 +773,16 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Precompute KV cache for documents")
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the data file")
+    parser.add_argument("--model_name", type=str, required=True,
+                        help="Model name")
+    parser.add_argument("--data_limit", type=int, default=3,
+                        help="Limit the number of documents to process")
+    parser.add_argument("--mode", type=str, default="takeaways",
+                        choices=["takeaways", "notepad", "none"], help="Mode to use for precomputation")    
+    parser.add_argument("--rotate", type=bool, default=False,
+                        help="Rotate keys, default is False")
+    parser.add_argument("--target_rotation_position", type=int, default=3072,
+                        help="Target rotation position, default is 3072")
     parser.add_argument("--budget", type=int, default=600+80, help="KV cache budget size")
     parser.add_argument("--summary_complexity", type=str, default="complex",
                         choices=["simple", "complex"], help="Summary complexity level")
@@ -782,8 +792,6 @@ def parse_args():
                         help="Directory to save precomputed cache (auto-generated if not specified)")
     parser.add_argument("--recompute", action="store_true",
                         help="Force recomputation even if cache exists")
-    parser.add_argument("--mode", type=str, default="takeaways",
-                        choices=["takeaways", "notepad", "none"], help="Mode to use for precomputation")    
     parser.add_argument("--window_size", type=int, default=128,
                         help="Window size for compression")
     return parser.parse_args()
@@ -794,7 +802,8 @@ if __name__ == "__main__":
 
     # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
     # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-    HF_MODEL_ID = "PlanePaper/LEAD-7B"
+    # HF_MODEL_ID = "PlanePaper/LEAD-7B"
+    HF_MODEL_ID = args.model_name
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
@@ -818,7 +827,7 @@ if __name__ == "__main__":
         "similarity_chunk_size": 4096,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
-        "rotate_keys": True,
+        "rotate_keys": args.rotate,
         "target_rotation_position": 3072,
     }
 
@@ -884,7 +893,7 @@ if __name__ == "__main__":
             data = json.load(f)
 
         documents = []
-        for idx, item in enumerate(data[:3]):
+        for idx, item in enumerate(data[:args.data_limit]):
             if 'question' in item:
                 sample = (
                     f"###Problem:\n---\n{item['question']}\n---\n"
