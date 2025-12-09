@@ -18,6 +18,8 @@ from .utils import PatchedDynamicCache
 from .precompute_cache import DynamicCacheWithCustomizedLength
 
 
+supported_models = ["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "PlanePaper/LEAD-7B"]
+
 def load_precomputed_kv_as_dynamic_cache(
     kv_path: str,
     doc_id: Optional[int] = None,
@@ -388,7 +390,7 @@ def verify_preload_with_dynamic_cache_streaming(
 
 
 def apply_chat_template(input_text, model_name: str) -> str:
-    if model_name == "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B" or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
+    if model_name in supported_models:  
         eos_token = "<｜end▁of▁sentence｜>"
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"

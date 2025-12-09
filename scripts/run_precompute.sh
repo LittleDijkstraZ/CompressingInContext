@@ -14,4 +14,4 @@ export RKV_DEBUG_COMPRESSION=1
 
 CUDA_VISIBLE_DEVICES=9 python -m src.pipeline.precompute_cache_comp --num_epochs 1 --data_path ./src/clustering/limo_clustering_results/k40/clusters/cluster_23.json --mode notepad --recompute 2>&1 | tee precompute_notepad.log
 
-CUDA_VISIBLE_DEVICES=9 python -m src.pipeline.precompute_cache_comp --data_path ./src/clustering/limo_clustering_results/k40/clusters/cluster_23.json --mode takeaways --budget xx 2>&1 | tee precompute_takeaways_{budget}.log
+CUDA_VISIBLE_DEVICES=9 python -m src.pipeline.precompute_cache_comp_win --data_path ./src/clustering/limo_clustering_results/k40/clusters/cluster_23.json --mode takeaways --budget 680 --window_size 128 2>&1 | tee precompute_takeaways_{budget}_lead.log

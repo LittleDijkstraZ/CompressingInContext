@@ -22,7 +22,7 @@ from transformers import (
 from rkv.config import get_compression_config
 from rkv.monkeypatch import replace_llama, replace_qwen2, replace_qwen3
 
-supported_models = ["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "PlanePaper/LEAD-7B"]
+
 
 
 class TqdmProgress(StoppingCriteria):
@@ -224,7 +224,7 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
 
 
 def apply_chat_template_takeaways(input_text, model_name: str, append_instruction=False) -> str:
-    if model_name in supported_models:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
@@ -278,7 +278,7 @@ def apply_chat_template_takeaways(input_text, model_name: str, append_instructio
 
 
 def apply_chat_template_notepad(input_text, model_name: str, append_instruction=False, is_first_document=True) -> str:
-    if model_name in supported_models:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
@@ -340,6 +340,27 @@ def apply_chat_template_notepad(input_text, model_name: str, append_instruction=
 {assistant_token}{think_end_think}{input_text}"""
     return generation_prompt, input_text
 
+
+
+def apply_chat_template_none(input_text, model_name: str) -> str:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B' or model_name == 'PlanePaper/LEAD-7B':
+        bos = "<｜begin▁of▁sentence｜>"
+        user_token = "<｜User｜>"
+        assistant_token = "<｜Assistant｜>"
+        # think_end_think = "<think>\n</think>"
+        think_end_think = "<think>\nOkey, my learning begins:"
+
+    else:
+        raise ValueError(f"Unsupported model for chat template: {model_name}")
+
+    prompt = (
+        "You are currently learning from some examples, which will later help you to solve similar problems. "
+        "Given the problem, reasoning, and solution, you will try to learn how to solve such problems on your own, "
+        "think about the key takeaways that can help you solve similar problems in the future. "
+    )
+
+    generation_prompt = f"""{bos}{user_token}{prompt}{assistant_token}{think_end_think}{input_text}"""
+    return generation_prompt, input_text
 
 class DynamicCacheWithCustomizedLength(DynamicCache):
     def __init__(self, ):
@@ -470,6 +491,14 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
                 model_name = HF_MODEL_ID,
                 append_instruction=True,
             )
+        elif args.mode == "none":
+
+            past_context += example + "\n"
+            input_text, past_context = apply_chat_template_none(
+                input_text = past_context,
+                model_name = HF_MODEL_ID,
+            )
+
         else:
             raise ValueError(f"Unsupported mode: {args.mode}")
         # print("=="*100)
@@ -692,6 +721,11 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
             model_name = HF_MODEL_ID,
             append_instruction=True,
         )
+    elif args.mode == "none":
+        input_text, _ = apply_chat_template_none(
+            input_text = past_context,
+            model_name = HF_MODEL_ID,
+        )
     else:
         raise ValueError(f"Unsupported mode: {args.mode}")
     
@@ -749,8 +783,8 @@ def parse_args():
     parser.add_argument("--recompute", action="store_true",
                         help="Force recomputation even if cache exists")
     parser.add_argument("--mode", type=str, default="takeaways",
-                        choices=["takeaways", "notepad"], help="Mode to use for precomputation")
-    parser.add_argument("--window_size", type=int, default=300,
+                        choices=["takeaways", "notepad", "none"], help="Mode to use for precomputation")    
+    parser.add_argument("--window_size", type=int, default=128,
                         help="Window size for compression")
     return parser.parse_args()
 
@@ -759,11 +793,12 @@ if __name__ == "__main__":
     args = parse_args()
 
     # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    HF_MODEL_ID = "PlanePaper/LEAD-7B"
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
-    HF_MAX_NEW_TOKENS = 2048
+    HF_MAX_NEW_TOKENS = 1
     SUMMARY_COMPLEXTIY = args.summary_complexity
     HF_TEMPERATURE = 0.1
     HF_TOP_P = 0.95
@@ -783,7 +818,7 @@ if __name__ == "__main__":
         "similarity_chunk_size": 4096,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
-        "rotate_keys": False,
+        "rotate_keys": True,
         "target_rotation_position": 3072,
     }
 
@@ -805,7 +840,11 @@ if __name__ == "__main__":
     if args.precomputed_dir:
         PRECOMPUTED_DIR = args.precomputed_dir
     elif num_epochs == 1:
-        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_{args.mode}"
+        # Add 'rotate' to the dir name if rotate_keys is True
+        rotate_str = ''
+        if METHOD_CONFIG.get("rotate_keys", False):
+            rotate_str = 'rotate_'
+        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_{args.mode}_{rotate_str}"
     else:
         PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
 

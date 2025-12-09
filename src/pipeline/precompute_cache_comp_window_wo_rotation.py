@@ -22,7 +22,7 @@ from transformers import (
 from rkv.config import get_compression_config
 from rkv.monkeypatch import replace_llama, replace_qwen2, replace_qwen3
 
-supported_models = ["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "PlanePaper/LEAD-7B"]
+
 
 
 class TqdmProgress(StoppingCriteria):
@@ -164,7 +164,9 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
         replace_llama(compression_config)
     elif "qwen3" in lower_name:
         replace_qwen3(compression_config)
-    elif "qwen" in lower_name or "lead" in lower_name:
+    elif "qwen" in lower_name:
+        replace_qwen2(compression_config)
+    elif "lead" in lower_name:
         replace_qwen2(compression_config)
     else:
         raise ValueError(f"Unsupported model for R-KV patch: {HF_MODEL_ID}")
@@ -224,7 +226,7 @@ def _load_tokenizer_and_model() -> tuple[AutoTokenizer, AutoModelForCausalLM, to
 
 
 def apply_chat_template_takeaways(input_text, model_name: str, append_instruction=False) -> str:
-    if model_name in supported_models:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B' or model_name == 'PlanePaper/LEAD-7B':
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
@@ -278,7 +280,7 @@ def apply_chat_template_takeaways(input_text, model_name: str, append_instructio
 
 
 def apply_chat_template_notepad(input_text, model_name: str, append_instruction=False, is_first_document=True) -> str:
-    if model_name in supported_models:
+    if model_name == 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B' or model_name == 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B':
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
@@ -345,8 +347,6 @@ class DynamicCacheWithCustomizedLength(DynamicCache):
     def __init__(self, ):
         super().__init__()
         self._rotation_enabled = False  # Flag to indicate if rotation has been applied
-        # Manual absolute position tracking for layer 0 (fallback when HF cache_position is missing)
-        self._manual_positions_layer0 = None
 
     def get_seq_length(self, layer_idx: Optional[int] = 0):
         return self._seen_tokens
@@ -380,24 +380,6 @@ class DynamicCacheWithCustomizedLength(DynamicCache):
             if self._seen_tokens != expected_seen_tokens:
                 print(f"[CACHE UPDATE] Layer 0: Correcting _seen_tokens: {self._seen_tokens} -> {expected_seen_tokens} (added {new_tokens} tokens, rotation_enabled={self._rotation_enabled})")
             self._seen_tokens = expected_seen_tokens
-
-        # Manual absolute position tracking: cache index -> position id
-        # This is a fallback when HF cache_position is missing downstream.
-        # Track only on layer 0 (shared length for all layers).
-        if layer_idx == 0 and hasattr(self, "_seen_tokens"):
-            current_seen_tokens = self._seen_tokens
-            cache_len = key_states.shape[-2]
-            # Positions of tokens just added for layer 0
-            new_positions = torch.arange(
-                current_seen_tokens - cache_len,
-                current_seen_tokens,
-                device=key_states.device,
-                dtype=torch.long,
-            )
-            if self._manual_positions_layer0 is None:
-                self._manual_positions_layer0 = new_positions
-            else:
-                self._manual_positions_layer0 = torch.cat([self._manual_positions_layer0, new_positions], dim=0)
 
         return result
 
@@ -582,8 +564,7 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
                 compression_applied, earliest_pos = compress_kv_cache_explicit(
                     past_key_values,
                     model,
-                    cache_position=None,  # Position tracking handled internally via kv_cluster._position_ids
-                    require_positions=True,  # Fail fast if positions are missing
+                    cache_position=None,  # Position tracking handled internally
                 )
                 if compression_applied:
                     print(f"[EXPLICIT] Compression applied, earliest_pos={earliest_pos}")
@@ -718,7 +699,7 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
         "buffer_size": cache_len,  # The actual cache buffer size
         "seen_tokens_cache": seen_tokens_cache,  # Same as seq_len when rotation is enabled
         "rotation_enabled": METHOD_CONFIG.get("rotate_keys", False),
-        "target_rotation_position": METHOD_CONFIG.get("target_rotation_position", 0),
+        "rotation_offset": METHOD_CONFIG.get("rotation_offset", 0),
         "initial_non_compressible_length": METHOD_CONFIG.get("initial_non_compressible_length", 0),
         "documents": documents,
         "summaries": summaries,
@@ -758,8 +739,9 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    # HF_MODEL_ID = "PlanePaper/LEAD-7B"
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
@@ -784,7 +766,7 @@ if __name__ == "__main__":
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
         "rotate_keys": False,
-        "target_rotation_position": 3072,
+        "rotation_offset": 3072,
     }
 
     HF_GENERATION_KWARGS = {
@@ -805,7 +787,7 @@ if __name__ == "__main__":
     if args.precomputed_dir:
         PRECOMPUTED_DIR = args.precomputed_dir
     elif num_epochs == 1:
-        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_{args.mode}"
+        PRECOMPUTED_DIR = f"hf_precomputed_kv_lead_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_{args.mode}"
     else:
         PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
 
