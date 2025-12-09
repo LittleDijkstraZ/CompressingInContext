@@ -8,7 +8,7 @@
 #SBATCH --time=48:00:00
 
 python -m src.pipeline.eval_cache \
-    --kv_cache_dir ./hf_precomputed_kv_budget_384_comp_complex \
+    --kv_cache_dir ./hf_precomputed_kv_budget_680_comp_complex \
     --repeat_time 16
 
 
