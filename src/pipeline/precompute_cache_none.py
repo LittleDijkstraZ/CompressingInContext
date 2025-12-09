@@ -774,18 +774,26 @@ def parse_args():
     parser.add_argument("--data_path", type=str, required=True,
                         help="Path to the data file")
     parser.add_argument("--model_name", type=str, required=True,
+                        choices=["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "PlanePaper/LEAD-7B"],
                         help="Model name")
+    parser.add_argument("--budget", type=int, default=512, 
+                        choices=np.array([256, 512, 1024, 2048, 4096]),
+                        help="KV cache budget size")
     parser.add_argument("--data_limit", type=int, default=3,
+                        choices=[5, 20],
                         help="Limit the number of documents to process")
     parser.add_argument("--mode", type=str, default="takeaways",
-                        choices=["takeaways", "notepad", "none"], help="Mode to use for precomputation")    
+                        choices=["takeaways", "notepad", "none"], 
+                        help="Mode to use for precomputation")    
     parser.add_argument("--rotate", type=bool, default=False,
+                        choices=[True, False],
                         help="Rotate keys, default is False")
     parser.add_argument("--target_rotation_position", type=int, default=3072,
+                        choices=[256, 1024, 3072,],
                         help="Target rotation position, default is 3072")
-    parser.add_argument("--budget", type=int, default=600+80, help="KV cache budget size")
-    parser.add_argument("--summary_complexity", type=str, default="complex",
-                        choices=["simple", "complex"], help="Summary complexity level")
+    
+    
+    parser.add_argument("--summary_complexity", type=str, default="complex", help="Summary complexity level")
     parser.add_argument("--num_epochs", type=int, default=1,
                         help="Number of times to repeat documents")
     parser.add_argument("--precomputed_dir", type=str, default=None,
