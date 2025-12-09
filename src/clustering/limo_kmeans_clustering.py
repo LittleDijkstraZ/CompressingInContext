@@ -18,7 +18,6 @@ from tqdm import tqdm
 import torch
 from transformers import AutoModel
 from numpy.linalg import norm
-
 # Configuration
 DATASET_NAME = "GAIR/LIMO"
 EMBEDDING_MODEL = "jinaai/jina-embeddings-v3"
