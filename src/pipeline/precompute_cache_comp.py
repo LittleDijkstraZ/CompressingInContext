@@ -345,6 +345,8 @@ class DynamicCacheWithCustomizedLength(DynamicCache):
     def __init__(self, ):
         super().__init__()
         self._rotation_enabled = False  # Flag to indicate if rotation has been applied
+        # Manual absolute position tracking for layer 0 (fallback when HF cache_position is missing)
+        self._manual_positions_layer0 = None
 
     def get_seq_length(self, layer_idx: Optional[int] = 0):
         return self._seen_tokens
@@ -378,6 +380,24 @@ class DynamicCacheWithCustomizedLength(DynamicCache):
             if self._seen_tokens != expected_seen_tokens:
                 print(f"[CACHE UPDATE] Layer 0: Correcting _seen_tokens: {self._seen_tokens} -> {expected_seen_tokens} (added {new_tokens} tokens, rotation_enabled={self._rotation_enabled})")
             self._seen_tokens = expected_seen_tokens
+
+        # Manual absolute position tracking: cache index -> position id
+        # This is a fallback when HF cache_position is missing downstream.
+        # Track only on layer 0 (shared length for all layers).
+        if layer_idx == 0 and hasattr(self, "_seen_tokens"):
+            current_seen_tokens = self._seen_tokens
+            cache_len = key_states.shape[-2]
+            # Positions of tokens just added for layer 0
+            new_positions = torch.arange(
+                current_seen_tokens - cache_len,
+                current_seen_tokens,
+                device=key_states.device,
+                dtype=torch.long,
+            )
+            if self._manual_positions_layer0 is None:
+                self._manual_positions_layer0 = new_positions
+            else:
+                self._manual_positions_layer0 = torch.cat([self._manual_positions_layer0, new_positions], dim=0)
 
         return result
 
@@ -562,7 +582,8 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
                 compression_applied, earliest_pos = compress_kv_cache_explicit(
                     past_key_values,
                     model,
-                    cache_position=None,  # Position tracking handled internally
+                    cache_position=None,  # Position tracking handled internally via kv_cluster._position_ids
+                    require_positions=True,  # Fail fast if positions are missing
                 )
                 if compression_applied:
                     print(f"[EXPLICIT] Compression applied, earliest_pos={earliest_pos}")
@@ -750,7 +771,7 @@ if __name__ == "__main__":
     DEFAULT_METHOD = "rkv"
     METHOD_CONFIG = {
         "budget": args.budget,
-        "window_size": 300, # BUG: IDK why budget need to be > window_size here
+        "window_size": 300,
         "kernel_size": 7,
         "mix_lambda": 0.1,
         "retain_ratio": 0.8,
@@ -761,7 +782,7 @@ if __name__ == "__main__":
         "similarity_chunk_size": 4096,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
-        "rotate_keys": False,
+        "rotate_keys": True,
         "target_rotation_position": 3072,
     }
 
