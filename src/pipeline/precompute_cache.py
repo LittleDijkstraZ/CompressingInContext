@@ -722,8 +722,6 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "9"
-
     args = parse_args()
 
     # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"

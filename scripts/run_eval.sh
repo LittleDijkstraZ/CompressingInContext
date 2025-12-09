@@ -7,9 +7,18 @@
 #SBATCH --error=work_dirs/slurm/precompute/precompute_%j.err
 #SBATCH --time=48:00:00
 
-python -m src.pipeline.eval_cache \
-    --kv_cache_dir ./hf_precomputed_kv_budget_384_comp_complex \
-    --repeat_time 16
+CUDA_VISIBLE_DEVICES=8 python -m src.pipeline.eval_cache \
+    --kv_cache_dir ./hf_precomputed_kv_budget_680_comp_complex_takeaways \
+    --repeat_time 16 
 
+CUDA_VISIBLE_DEVICES=7 python -m src.pipeline.eval_cache \
+    --kv_cache_dir ./hf_precomputed_kv_budget_680_comp_complex_takeaways \
+    --repeat_time 16 \
+    --follow_up_prompt "Three vertices of a cube are $P=(7,12,10)$ , $Q=(8,8,1)$ , and $R=(11,3,9)$ . What is the surface area of the cube?" \
+    --output_file ./results/results_budget_ 680_comp_complex_takeaways_doc0.json
 
-# python -m src.pipeline.eval_cache     --kv_cache_dir ./hf_precomputed_kv_budget_780_comp_complex     --repeat_time 16 --model_name 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B'
+CUDA_VISIBLE_DEVICES=6 python -m src.pipeline.eval_cache \
+    --kv_cache_dir ./hf_precomputed_kv_budget_680_comp_complex_notepad \
+    --repeat_time 16 \
+    --follow_up_prompt "Three vertices of a cube are $P=(7,12,10)$ , $Q=(8,8,1)$ , and $R=(11,3,9)$ . What is the surface area of the cube?" \
+    --output_file ./results/results_budget_680_comp_complex_notepad_doc0.json

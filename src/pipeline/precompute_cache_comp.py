@@ -663,6 +663,7 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
         input_text, _ = apply_chat_template_notepad(
         input_text = past_context,
         model_name = HF_MODEL_ID,
+        append_instruction=True,
     )
     elif args.mode == "takeaways":
         input_text, _ = apply_chat_template_takeaways(
@@ -728,16 +729,16 @@ def parse_args():
                         help="Force recomputation even if cache exists")
     parser.add_argument("--mode", type=str, default="takeaways",
                         choices=["takeaways", "notepad"], help="Mode to use for precomputation")
+    parser.add_argument("--window_size", type=int, default=300,
+                        help="Window size for compression")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
-    # os.environ["CUDA_VISIBLE_DEVICES"] = "9"
-
     args = parse_args()
 
-    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+    # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
@@ -750,7 +751,7 @@ if __name__ == "__main__":
     DEFAULT_METHOD = "rkv"
     METHOD_CONFIG = {
         "budget": args.budget,
-        "window_size": 300, # BUG: IDK why budget need to be > window_size here
+        "window_size": args.window_size, # BUG: IDK why budget need to be > window_size here
         "kernel_size": 7,
         "mix_lambda": 0.1,
         "retain_ratio": 0.8,
@@ -761,7 +762,7 @@ if __name__ == "__main__":
         "similarity_chunk_size": 4096,  # Reduce from 1024 to be more conservative
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
-        "rotate_keys": True,
+        "rotate_keys": False,
         "rotation_offset": 3072,
     }
 
@@ -783,9 +784,9 @@ if __name__ == "__main__":
     if args.precomputed_dir:
         PRECOMPUTED_DIR = args.precomputed_dir
     elif num_epochs == 1:
-        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}_comp_{SUMMARY_COMPLEXTIY}"
+        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_{args.mode}"
     else:
-        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}_comp_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
+        PRECOMPUTED_DIR = f"hf_precomputed_kv_budget_{budget}__window_{args.window_size}_comp_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
 
     # Check if cache already exists
     metadata_path = Path(os.path.join(PRECOMPUTED_DIR, "metadata.json"))
@@ -823,7 +824,7 @@ if __name__ == "__main__":
             data = json.load(f)
 
         documents = []
-        for idx, item in enumerate(data[:20]):
+        for idx, item in enumerate(data[:3]):
             if 'question' in item:
                 sample = (
                     f"###Problem:\n---\n{item['question']}\n---\n"
