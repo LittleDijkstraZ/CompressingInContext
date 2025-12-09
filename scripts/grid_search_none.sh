@@ -24,4 +24,4 @@ python -m src.pipeline.run_grid_search_none \
     --data-path ./src/clustering/similar_questions_result.json \
     --cache-dir "$CACHE_DIR" \
     --results-dir "$RESULTS_DIR" \
-    --rotation-configs 1024
+    --rotation-configs none

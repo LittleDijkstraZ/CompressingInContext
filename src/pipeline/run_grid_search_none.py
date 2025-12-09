@@ -42,10 +42,10 @@ def run_precomputation(
     Returns:
         Path to the generated cache directory
     """
-    print(f"\n{'='*80}")
+    print(f"\n{'='*80}", flush=True)
     print(f"Running precomputation: model={model_name}, budget={budget}, data_limit={data_limit}, "
-          f"mode={mode}, rotate={rotate}, target_pos={target_rotation_position}")
-    print(f"{'='*80}")
+          f"mode={mode}, rotate={rotate}, target_pos={target_rotation_position}", flush=True)
+    print(f"{'='*80}", flush=True)
 
     # Get script directory to resolve relative paths
     script_dir = Path(__file__).parent
@@ -85,15 +85,17 @@ def run_precomputation(
         '--precomputed_dir', str(precomputed_path),
     ]
 
-    print(f"Running: {' '.join(cmd)}")
+    print(f"Running: {' '.join(cmd)}", flush=True)
 
-    # Run precomputation
+    # Run precomputation - use unbuffered output
+    env = os.environ.copy()
+    env['PYTHONUNBUFFERED'] = '1'
     result = subprocess.run(
         cmd,
         capture_output=False,
         text=True,
         cwd=str(project_root),
-        env=os.environ.copy(),
+        env=env,
     )
 
     if result.returncode != 0:

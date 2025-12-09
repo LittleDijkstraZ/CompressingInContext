@@ -785,8 +785,7 @@ def parse_args():
     parser.add_argument("--mode", type=str, default="takeaways",
                         choices=["takeaways", "notepad", "none"], 
                         help="Mode to use for precomputation")    
-    parser.add_argument("--rotate", type=bool, default=False,
-                        choices=[True, False],
+    parser.add_argument("--rotate", type=lambda x: x.lower() == 'true', default=False,
                         help="Rotate keys, default is False")
     parser.add_argument("--target_rotation_position", type=int, default=3072,
                         choices=[256, 1024, 3072,],
@@ -808,6 +807,21 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
+    # Print configuration at the start
+    print(f"\n{'='*80}", flush=True)
+    print(f"[PRECOMPUTE_CACHE_NONE] Starting precomputation with parameters:", flush=True)
+    print(f"  model_name: {args.model_name}", flush=True)
+    print(f"  budget: {args.budget}", flush=True)
+    print(f"  window_size: {args.window_size}", flush=True)
+    print(f"  data_limit: {args.data_limit}", flush=True)
+    print(f"  mode: {args.mode}", flush=True)
+    print(f"  rotate: {args.rotate}", flush=True)
+    print(f"  target_rotation_position: {args.target_rotation_position}", flush=True)
+    print(f"  summary_complexity: {args.summary_complexity}", flush=True)
+    print(f"  num_epochs: {args.num_epochs}", flush=True)
+    print(f"  precomputed_dir: {args.precomputed_dir}", flush=True)
+    print(f"{'='*80}\n", flush=True)
+
     # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
     # HF_MODEL_ID = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
     # HF_MODEL_ID = "PlanePaper/LEAD-7B"
@@ -815,7 +829,7 @@ if __name__ == "__main__":
     ATTN_IMPL = "flash_attention_2"
     # ATTN_IMPL = "sdpa"
     # HF_MAX_NEW_TOKENS = int(os.getenv("HF_MAX_NEW_TOKENS", "64"))
-    HF_MAX_NEW_TOKENS = 1
+    HF_MAX_NEW_TOKENS = 1 if args.mode == "none" else 2048
     SUMMARY_COMPLEXTIY = args.summary_complexity
     HF_TEMPERATURE = 0.1
     HF_TOP_P = 0.95
@@ -836,7 +850,7 @@ if __name__ == "__main__":
         "use_random_projection": False,  # Set to True if still OOM
         "projection_dim": 128,  # Only used if use_random_projection=True
         "rotate_keys": args.rotate,
-        "target_rotation_position": 3072,
+        "target_rotation_position": args.target_rotation_position,
     }
 
     HF_GENERATION_KWARGS = {
