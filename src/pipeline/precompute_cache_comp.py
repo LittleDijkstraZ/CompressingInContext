@@ -844,7 +844,7 @@ if __name__ == "__main__":
             data = json.load(f)
 
         documents = []
-        for idx, item in enumerate(data[:20]):
+        for idx, item in enumerate(data[:6]):
             if 'question' in item:
                 sample = (
                     f"###Problem:\n---\n{item['question']}\n---\n"

@@ -147,7 +147,9 @@ def main():
     """
     Main function to process all result files in the results directory.
     """
-    results_dir = Path("results_evals")
+    # results_dir = Path("results_evals")
+    results_dir = Path("./results/scenario_verification_20251129_050944/")
+
 
     if not results_dir.exists():
         print(f"Error: Results directory '{results_dir}' not found!")
