@@ -17,10 +17,55 @@ Usage:
 import subprocess
 import argparse
 import os
+import re
 from pathlib import Path
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Set
 import json
+
+
+def get_config_stem(
+    model_shortName: str,
+    budget: int,
+    window_size: int,
+    summary_complexity: str,
+    mode: str,
+    rotate: bool,
+    data_limit: int,
+    num_epochs: int,
+) -> str:
+    """
+    Build the config stem (without timestamp) for a given configuration.
+    This matches the naming convention in run_precomputation.
+    """
+    rotate_str = "rotate_" if rotate else ""
+    stem = f"{model_shortName}_{budget}_{window_size}_{summary_complexity}_{mode}_{rotate_str}_{data_limit}"
+    if num_epochs > 1:
+        stem += f"_{num_epochs}"
+    return stem
+
+
+def collect_existing_config_stems(results_dir: Optional[Path]) -> Set[str]:
+    """
+    Collect all existing config stems from the results directory.
+    Looks at eval_*.json files and extracts the config stem (without timestamp).
+    """
+    existing_stems = set()
+    if results_dir is None or not results_dir.exists():
+        return existing_stems
+
+    # Pattern to match eval files and extract the stem before _stamp-
+    # e.g., eval_DS7B_256_128_complex_takeaways_rotate__1_stamp-20251210_024217.json
+    stamp_pattern = re.compile(r'^eval_(.+)_stamp-\d{8}_\d{6}\.json$')
+
+    for file_path in results_dir.glob("eval_*.json"):
+        match = stamp_pattern.match(file_path.name)
+        if match:
+            config_stem = match.group(1)
+            existing_stems.add(config_stem)
+            print(f"  Found existing config: {config_stem}")
+
+    return existing_stems
 
 
 def run_evaluation(
@@ -29,6 +74,7 @@ def run_evaluation(
     max_new_tokens: int = 8192,
     repeat_time: int = 16,
     eval_results_dir: Optional[Path] = None,
+    problem = None,
 ) -> bool:
     """
     Run evaluation on a precomputed KV cache.
@@ -53,6 +99,8 @@ def run_evaluation(
         '--max_new_tokens', str(max_new_tokens),
         '--repeat_time', str(repeat_time),
     ]
+    if problem is not None:
+        cmd.extend(['--follow_up_prompt', problem])
 
     # Add output file if eval_results_dir is specified
     if eval_results_dir is not None:
@@ -94,6 +142,7 @@ def run_precomputation(
     window_size: int,
     num_epochs: int,
     cache_dir: Optional[Path] = None,
+    divide_method: str = "step_length",
 ) -> Optional[Path]:
     """
     Run precomputation with given parameters.
@@ -119,9 +168,16 @@ def run_precomputation(
     model_shortName = model_shortname_dict[model_name]
 
     PRECOMPUTED_DIR_NAME = (
-        f"{model_shortName}_{budget}_window_{window_size}_comp_{summary_complexity}"
-        f"_{mode}_{rotate_str}_data_{data_limit}"
+        f"{model_shortName}_{budget}_{window_size}_{summary_complexity}"
+        f"_{mode}_{rotate_str}_{data_limit}"
     )
+    if num_epochs > 1:
+        PRECOMPUTED_DIR_NAME += f"_{num_epochs}"
+    time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    PRECOMPUTED_DIR_NAME += f"_stamp-{time_stamp}"
+    if divide_method != "step_length":
+        PRECOMPUTED_DIR += f"_{divide_method}"
+
     if cache_dir is not None:
         precomputed_path = cache_dir / PRECOMPUTED_DIR_NAME
     else:
@@ -185,12 +241,14 @@ def run_grid_search(
     rotation_configs: List[str],
     data_path: str,
     summary_complexity: str,
-    window_size: int,
-    num_epochs: int,
+    window_sizes: List[int],
+    num_epochs_list: List[int],
     cache_dir: Optional[Path] = None,
     max_new_tokens: int = 8192,
     repeat_time: int = 16,
     eval_results_dir: Optional[Path] = None,
+    problem: Optional[str] = None,
+    divide_method: str = "step_length",
 ) -> List[Tuple]:
     """
     Run grid search over all parameter combinations.
@@ -203,55 +261,90 @@ def run_grid_search(
     print("GRID SEARCH: precompute_cache_none.py")
     print("="*80)
 
+    # Collect existing config stems to skip already-run configurations
+    print("\nCollecting existing configurations from results directory...")
+    existing_stems = collect_existing_config_stems(eval_results_dir)
+    print(f"Found {len(existing_stems)} existing configurations")
+
+    # Model shortname mapping (same as in run_precomputation)
+    model_shortname_dict = {
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "DS7B",
+        "PlanePaper/LEAD-7B": "LEAD7B"
+    }
+
     results = []
+    skipped_count = 0
 
     for model_name in model_names:
         print(f"\n=== Model: {model_name} ===")
+        model_shortName = model_shortname_dict.get(model_name, model_name.split("/")[-1])
         for mode in modes:
             print(f"\n--- Mode: {mode} ---")
             for data_limit in data_limits:
                 for budget in budget_range:
-                    for rot_config in rotation_configs:
-                        if rot_config == "none":
-                            rotate = False
-                            target_pos = 307200  # default, ignored when rotate=False
-                        else:
-                            rotate = True
-                            target_pos = int(rot_config)
-                        if target_pos < budget:
-                            print(f"WARNING: Target position {target_pos} is less than budget {budget}, skipping")
-                            continue
+                    for window_size in window_sizes:
+                        for num_epochs in num_epochs_list:
+                            for rot_config in rotation_configs:
+                                if rot_config == "none":
+                                    rotate = False
+                                    target_pos = 307200  # default, ignored when rotate=False
+                                else:
+                                    rotate = True
+                                    target_pos = int(rot_config)
+                                if target_pos < budget:
+                                    print(f"WARNING: Target position {target_pos} is less than budget {budget}, skipping")
+                                    continue
 
-                        precomputed_dir = run_precomputation(
-                            model_name=model_name,
-                            budget=budget,
-                            data_limit=data_limit,
-                            mode=mode,
-                            rotate=rotate,
-                            target_rotation_position=target_pos,
-                            data_path=data_path,
-                            summary_complexity=summary_complexity,
-                            window_size=window_size,
-                            num_epochs=num_epochs,
-                            cache_dir=cache_dir,
-                        )
+                                # Check if this config already exists
+                                config_stem = get_config_stem(
+                                    model_shortName=model_shortName,
+                                    budget=budget,
+                                    window_size=window_size,
+                                    summary_complexity=summary_complexity,
+                                    mode=mode,
+                                    rotate=rotate,
+                                    data_limit=data_limit,
+                                    num_epochs=num_epochs,
+                                )
+                                if config_stem in existing_stems:
+                                    print(f"SKIPPING (already exists): {config_stem}")
+                                    skipped_count += 1
+                                    continue
 
-                        # Run evaluation if precomputation succeeded
-                        eval_success = False
-                        if precomputed_dir is not None:
-                            eval_success = run_evaluation(
-                                model_name=model_name,
-                                kv_cache_dir=precomputed_dir,
-                                max_new_tokens=max_new_tokens,
-                                repeat_time=repeat_time,
-                                eval_results_dir=eval_results_dir,
-                            )
+                                precomputed_dir = run_precomputation(
+                                    model_name=model_name,
+                                    budget=budget,
+                                    data_limit=data_limit,
+                                    mode=mode,
+                                    rotate=rotate,
+                                    target_rotation_position=target_pos,
+                                    data_path=data_path,
+                                    summary_complexity=summary_complexity,
+                                    window_size=window_size,
+                                    num_epochs=num_epochs,
+                                    cache_dir=cache_dir,
+                                    divide_method=divide_method,
+                                )
 
-                        results.append((
-                            model_name, budget, data_limit, mode,
-                            rotate, target_pos, precomputed_dir, eval_success
-                        ))
+                                # Run evaluation if precomputation succeeded
+                                eval_success = False
+                                if precomputed_dir is not None:
+                                    eval_success = run_evaluation(
+                                        model_name=model_name,
+                                        kv_cache_dir=precomputed_dir,
+                                        max_new_tokens=max_new_tokens,
+                                        repeat_time=repeat_time,
+                                        eval_results_dir=eval_results_dir,
+                                        problem=problem,
+                                    )
 
+                                results.append((
+                                    model_name, budget, data_limit, mode,
+                                    rotate, target_pos, window_size, num_epochs,
+                                    precomputed_dir, eval_success
+                                ))
+
+    print(f"\nSkipped {skipped_count} configurations that already existed")
     return results
 
 
@@ -272,11 +365,13 @@ def save_grid_search_summary(results: List[Tuple], output_file: Path):
                 "mode": mode,
                 "rotate": rotate,
                 "target_rotation_position": target_pos,
+                "window_size": window_size,
+                "num_epochs": num_epochs,
                 "cache_dir": str(cache_dir) if cache_dir else None,
                 "precompute_success": cache_dir is not None,
                 "eval_success": eval_success
             }
-            for model_name, budget, data_limit, mode, rotate, target_pos, cache_dir, eval_success in results
+            for model_name, budget, data_limit, mode, rotate, target_pos, window_size, num_epochs, cache_dir, eval_success in results
         ]
     }
 
@@ -317,19 +412,18 @@ Examples:
 
     # Grid search parameters
     parser.add_argument('--budget-range', nargs='+', type=int,
-                       default=[256, 512, 1024, 2048, 4096],
+                       default=[512,],
                        help='Budget range (default: 256 512 1024 2048 4096)')
     parser.add_argument('--data-limits', nargs='+', type=int,
-                       default=[5, 20],
+                       default=[3,],
                        help='Data limits (default: 5 20)')
     parser.add_argument('--modes', nargs='+', type=str,
-                       default=["takeaways", "notepad", "none"],
+                       default=["takeaways",],
                        choices=["takeaways", "notepad", "none"],
                        help='Modes to search over (default: takeaways notepad none)')
     # Rotation configs: "none" means no rotation, numbers mean rotate=True with that position
     parser.add_argument('--rotation-configs', nargs='+', type=str,
-                       default=["none", "512", "2048"],
-                       choices=["none", "512", "2048"],
+                       default=["none",], # ["none", "256", "1024", "3072"],
                        help='Rotation configurations: "none" for no rotation, or position value for rotate=True (default: none 512 1024 2048)')
 
     # Data and output parameters
@@ -337,10 +431,12 @@ Examples:
                        help='Path to the data file')
     parser.add_argument('--summary-complexity', type=str, default="complex",
                        help='Summary complexity level')
-    parser.add_argument('--window-size', type=int, default=128,
-                       help='Window size for compression')
-    parser.add_argument('--num-epochs', type=int, default=1,
-                       help='Number of times to repeat documents')
+    parser.add_argument('--window-sizes', nargs='+', type=int, default=[128,],
+                       help='Window sizes for compression (default: 128)')
+    parser.add_argument('--num-epochs-list', nargs='+', type=int, default=[1,],
+                       help='Number of epochs to search over (default: 1)')
+    parser.add_argument('--divide-method', type=str, default="step_length",
+                       help='Method to divide the input')
 
     # Directory parameters
     parser.add_argument('--cache-dir', type=str, default=None,
@@ -355,6 +451,9 @@ Examples:
                        help='Maximum new tokens for evaluation (default: 8192)')
     parser.add_argument('--repeat-time', type=int, default=16,
                        help='Number of times to repeat generation for evaluation (default: 16)')
+
+    parser.add_argument('--problem', type=str, default=None,
+                       help='Problem to evaluate on')
 
     args = parser.parse_args()
 
@@ -375,12 +474,14 @@ Examples:
         rotation_configs=args.rotation_configs,
         data_path=args.data_path,
         summary_complexity=args.summary_complexity,
-        window_size=args.window_size,
-        num_epochs=args.num_epochs,
+        window_sizes=args.window_sizes,
+        num_epochs_list=args.num_epochs_list,
         cache_dir=cache_dir,
         max_new_tokens=args.max_new_tokens,
         repeat_time=args.repeat_time,
         eval_results_dir=eval_results_dir,
+        problem=args.problem,
+        divide_method=args.divide_method,
     )
 
     # Save summary

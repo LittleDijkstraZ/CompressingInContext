@@ -971,11 +971,11 @@ if __name__ == "__main__":
         if METHOD_CONFIG.get("rotate_keys", False):
             rotate_str = f'rotate_{args.target_rotation_position}'
         PRECOMPUTED_DIR = f"{model_shortname}_{budget}_{args.window_size}_{SUMMARY_COMPLEXTIY}_{args.mode}_{rotate_str}_{args.data_limit}"
-    if num_epochs > 1:
-        PRECOMPUTED_DIR = f"{PRECOMPUTED_DIR}_{num_epochs}"
-    PRECOMPUTED_DIR += f"_stamp-{timestamp}"
-    if args.divide_method != "step_length":
-        PRECOMPUTED_DIR += f"_{args.divide_method}"
+        if num_epochs > 1:
+            PRECOMPUTED_DIR = f"{PRECOMPUTED_DIR}_{num_epochs}"
+        PRECOMPUTED_DIR += f"_stamp-{timestamp}"
+        if args.divide_method != "step_length":
+            PRECOMPUTED_DIR += f"_{args.divide_method}"
 
     # Check if cache already exists
     metadata_path = Path(os.path.join(PRECOMPUTED_DIR, "metadata.json"))
