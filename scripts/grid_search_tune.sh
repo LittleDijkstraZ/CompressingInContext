@@ -43,7 +43,7 @@ echo "=========================================="
 echo "Running default configuration"
 echo "=========================================="
 python -m src.pipeline.run_grid_search_none \
-    --data-path ./src/clustering/similar_questions_result.json \
+    --data-path ./src/clustering/similar_questions_result_aime25_3.json \
     --cache-dir $CACHE_DIR \
     --results-dir $RESULTS_DIR \
     --model-names ${model_name} \
@@ -61,7 +61,7 @@ echo "=========================================="
 echo "Tuning budget: ${TUNE_BUDGETS}"
 echo "=========================================="
 python -m src.pipeline.run_grid_search_none \
-    --data-path ./src/clustering/similar_questions_result.json \
+    --data-path ./src/clustering/similar_questions_result_aime25_3.json \
     --cache-dir $CACHE_DIR \
     --results-dir $RESULTS_DIR \
     --model-names ${model_name} \
@@ -79,7 +79,7 @@ echo "=========================================="
 echo "Tuning window_size: ${TUNE_WINDOW_SIZES}"
 echo "=========================================="
 python -m src.pipeline.run_grid_search_none \
-    --data-path ./src/clustering/similar_questions_result.json \
+    --data-path ./src/clustering/similar_questions_result_aime25_3.json  \
     --cache-dir $CACHE_DIR \
     --results-dir $RESULTS_DIR \
     --model-names ${model_name} \
@@ -97,7 +97,7 @@ echo "=========================================="
 echo "Tuning rotation: ${TUNE_ROTATIONS}"
 echo "=========================================="
 python -m src.pipeline.run_grid_search_none \
-    --data-path ./src/clustering/similar_questions_result.json \
+    --data-path ./src/clustering/similar_questions_result_aime25_3.json  \
     --cache-dir $CACHE_DIR \
     --results-dir $RESULTS_DIR \
     --model-names ${model_name} \
@@ -115,7 +115,7 @@ echo "=========================================="
 echo "Tuning data_limit: ${TUNE_DATA_LIMITS}"
 echo "=========================================="
 python -m src.pipeline.run_grid_search_none \
-    --data-path ./src/clustering/similar_questions_result.json \
+    --data-path ./src/clustering/similar_questions_result_aime25_3.json  \
     --cache-dir $CACHE_DIR \
     --results-dir $RESULTS_DIR \
     --model-names ${model_name} \
@@ -133,7 +133,7 @@ echo "=========================================="
 echo "Tuning mode: ${TUNE_MODES}"
 echo "=========================================="
 python -m src.pipeline.run_grid_search_none \
-    --data-path ./src/clustering/similar_questions_result.json \
+    --data-path ./src/clustering/similar_questions_result_aime25_3.json  \
     --cache-dir $CACHE_DIR \
     --results-dir $RESULTS_DIR \
     --model-names ${model_name} \
@@ -151,7 +151,7 @@ echo "=========================================="
 echo "Tuning num_epochs: ${TUNE_NUM_EPOCHS}"
 echo "=========================================="
 python -m src.pipeline.run_grid_search_none \
-    --data-path ./src/clustering/similar_questions_result.json \
+    --data-path ./src/clustering/similar_questions_result_aime25_3.json  \
     --cache-dir $CACHE_DIR \
     --results-dir $RESULTS_DIR \
     --model-names ${model_name} \

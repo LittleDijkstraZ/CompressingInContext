@@ -123,7 +123,7 @@ for i, config in enumerate(configs):
 
     cmd = [
         'python', '-m', 'src.pipeline.run_grid_search_none',
-        '--data-path', './src/clustering/similar_questions_result.json',
+        '--data-path', './src/clustering/similar_questions_result_aime25_3.json',
         '--cache-dir', '${CACHE_DIR}',
         '--results-dir', '${RESULTS_DIR}',
         '--model-names', config['model_name'],
