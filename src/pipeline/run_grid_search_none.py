@@ -427,7 +427,7 @@ Examples:
                        help='Rotation configurations: "none" for no rotation, or position value for rotate=True (default: none 512 1024 2048)')
 
     # Data and output parameters
-    parser.add_argument('--data-path', type=str, default="data_math.json",
+    parser.add_argument('--data-path', type=str, default="./src/clustering/similar_questions_result_aime25_3.json",
                        help='Path to the data file')
     parser.add_argument('--summary-complexity', type=str, default="complex",
                        help='Summary complexity level')
@@ -454,8 +454,13 @@ Examples:
 
     parser.add_argument('--problem', type=str, default=None,
                        help='Problem to evaluate on')
+    
+
 
     args = parser.parse_args()
+
+    if args.problem is None:
+        args.problem = "The $9$ members of a baseball team went to an ice-cream parlor after their game. Each player had a single scoop cone of chocolate, vanilla, or strawberry ice cream. At least one player chose each flavor, and the number of players who chose chocolate was greater than the number of players who chose vanilla, which was greater than the number of players who chose strawberry. Let $N$ be the number of different assignments of flavors to players that meet these conditions. Find the remainder when $N$ is divided by $1000.$"
 
     # Convert directory arguments to Path objects if provided
     cache_dir = Path(args.cache_dir) if args.cache_dir else None

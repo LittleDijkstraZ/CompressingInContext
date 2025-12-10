@@ -4,8 +4,8 @@
 #SBATCH --gpus=1
 #SBATCH --exclude=c007,h02
 #SBATCH --mem=80G
-#SBATCH --output=work_dirs/slurm/grid_search/grid_search_random_%j.out
-#SBATCH --error=work_dirs/slurm/grid_search/grid_search_random_%j.err
+#SBATCH --output=work_dirs/slurm/grid_search_random/grid_search_random_%j.out
+#SBATCH --error=work_dirs/slurm/grid_search_random/grid_search_random_%j.err
 #SBATCH --time=48:00:00
 
 export RKV_DEBUG_COMPRESSION=1
