@@ -168,7 +168,6 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    args.model_name = "PlanePaper/LEAD-7B"
 
     if args.problem is None:
         args.problem = (

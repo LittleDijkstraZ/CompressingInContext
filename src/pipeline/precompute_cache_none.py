@@ -276,7 +276,7 @@ def apply_chat_template_takeaways(input_text, model_name: str, append_instructio
 
 
 def apply_chat_template_notepad(input_text, model_name: str, append_instruction=False, is_first_document=True) -> str:
-    if model_name in supported_models:  
+    if model_name in supported_models:
         bos = "<｜begin▁of▁sentence｜>"
         user_token = "<｜User｜>"
         assistant_token = "<｜Assistant｜>"
@@ -330,6 +330,62 @@ def apply_chat_template_notepad(input_text, model_name: str, append_instruction=
     #     prompt += Instruction_medium
     elif SUMMARY_COMPLEXTIY == "complex":
         # prompt += Instruction_complex
+        cur_backbone += Instruction_complex
+
+    if append_instruction:
+        input_text += cur_backbone
+    generation_prompt = f"""{bos}{user_token}{prompt}
+{assistant_token}{think_end_think}{input_text}"""
+    return generation_prompt, input_text
+
+
+def apply_chat_template_app(input_text, model_name: str, append_instruction=False, is_first_document=True) -> str:
+    if model_name in supported_models:
+        bos = "<｜begin▁of▁sentence｜>"
+        user_token = "<｜User｜>"
+        assistant_token = "<｜Assistant｜>"
+        # think_end_think = "<think>\n</think>"
+        think_end_think = "<think>\nOkey, my learning begins:\n"
+
+    else:
+        raise ValueError(f"Unsupported model for chat template: {model_name}")
+
+    prompt = (
+        "You are currently learning from some examples, which will later help you to solve similar problems. "
+        "I am keeping a note that records all the highlights for me to solve previous problems. "
+        "Given the problem, reasoning, and solution, you will add new insights to the note (under the ###Note section). "
+    )
+
+    # Different backbone for first document vs subsequent documents
+    if is_first_document:
+        cur_backbone = (
+            "(Given the problem, reasoning, and solution, I will create an initial note capturing the key insights "
+            "and strategies that can help me solve similar problems in the future. "
+        )
+    else:
+        cur_backbone = (
+            "(I am keeping a note that records all the highlights for me to solve previous problems. "
+            "Now I am going to add to the note with the current problem. "
+            "Here's my follow up: "
+        )
+
+    Instruction_simple = (
+        "The note should be bullet points. They should be highlevel, short and to the point. "
+        "I will add 3 new bullet points continuing from where the previous note left off, following a markdown format. "
+        "I will end the note with the '---' token underneath the last point.)\n"
+    )
+
+    Instruction_complex = (
+        "The note should be bullet points. "
+        "I will add new insights and strategies from the current problem to my existing note. "
+        "I will continue numbering from where the previous note ended (e.g., if previous note had 1-5, I'll add 6-10). "
+        "I must include specific steps and details from the reasoning process. "
+        "I will add 5 new points and end the note with '---' token underneath the last point.)\n"
+    )
+
+    if SUMMARY_COMPLEXTIY == "simple":
+        cur_backbone += Instruction_simple
+    elif SUMMARY_COMPLEXTIY == "complex":
         cur_backbone += Instruction_complex
 
     if append_instruction:
@@ -480,10 +536,28 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
                 append_instruction=True,
                 is_first_document=is_first_document,
             )
+        elif args.mode == "app":
+            is_first_document = (doc_id == 0)
+
+            # Build the context: document + previous note (if exists) + prompt to add
+            past_context += example + "\n"
+
+            if not is_first_document and current_note:
+                # Append the previous note and ask the model to add to it
+                past_context += f"\n###Previous Note:\n{current_note}\n"
+
+            past_context += "\n###Note:\n"
+
+            input_text, past_context = apply_chat_template_app(
+                input_text = past_context,
+                model_name = HF_MODEL_ID,
+                append_instruction=True,
+                is_first_document=is_first_document,
+            )
         elif args.mode == "takeaways":
 
             past_context += example + "\n\n###Takeaways:\n"
-            
+
             input_text, past_context = apply_chat_template_takeaways(
                 input_text = past_context,
                 model_name = HF_MODEL_ID,
@@ -668,13 +742,19 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
         # Update the current note for the next iteration
         if args.mode == "notepad":
             current_note = summary
+        elif args.mode == "app":
+            # For app mode, append the new content to the existing note
+            if current_note:
+                current_note = current_note + "\n" + summary
+            else:
+                current_note = summary
 
 
         print(f"raw length={len(raw)} vs summary length={len(summary)}")
         print(f"Warning: raw!=summary") if raw != summary else None
         print("=" * 100)
         print(tokenizer.decode(full_text_ids[input_len:], skip_special_tokens=False))
-        
+
         # print(f"Generated summary: {summary}")
         # print(f"Generated summary raw: {raw}")
         print("=" * 100)
@@ -709,6 +789,12 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
 
     if args.mode == "notepad":
         input_text, _ = apply_chat_template_notepad(
+        input_text = past_context,
+        model_name = HF_MODEL_ID,
+        append_instruction=True,
+    )
+    elif args.mode == "app":
+        input_text, _ = apply_chat_template_app(
         input_text = past_context,
         model_name = HF_MODEL_ID,
         append_instruction=True,
@@ -774,15 +860,13 @@ def parse_args():
     parser.add_argument("--model_name", type=str, required=True,
                         choices=["deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "PlanePaper/LEAD-7B"],
                         help="Model name")
-    parser.add_argument("--budget", type=int, default=512, 
-                        choices=np.array([256, 512, 1024, 2048, 4096]),
+    parser.add_argument("--budget", type=int, default=384, 
                         help="KV cache budget size")
     parser.add_argument("--data_limit", type=int, default=3,
-                        choices=[5, 20],
                         help="Limit the number of documents to process")
     parser.add_argument("--mode", type=str, default="takeaways",
-                        choices=["takeaways", "notepad", "none"], 
-                        help="Mode to use for precomputation")    
+                        choices=["takeaways", "notepad", "app", "none"],
+                        help="Mode to use for precomputation")
     parser.add_argument("--rotate", type=lambda x: x.lower() == 'true', default=False,
                         help="Rotate keys, default is False")
     parser.add_argument("--target_rotation_position", type=int, default=3072,
@@ -799,6 +883,9 @@ def parse_args():
                         help="Force recomputation even if cache exists")
     parser.add_argument("--window_size", type=int, default=128,
                         help="Window size for compression")
+    parser.add_argument("--divide_method", type=str, default="step_length",
+                        help="Method to divide the input")
+
     return parser.parse_args()
 
 
@@ -873,16 +960,22 @@ if __name__ == "__main__":
     max_len = HF_MAX_NEW_TOKENS
     num_epochs = args.num_epochs
 
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     if args.precomputed_dir:
         PRECOMPUTED_DIR = args.precomputed_dir
-    elif num_epochs == 1:
+    else:
         # Add 'rotate' to the dir name if rotate_keys is True
         rotate_str = ''
         if METHOD_CONFIG.get("rotate_keys", False):
-            rotate_str = 'rotate_'
-        PRECOMPUTED_DIR = f"{model_shortname}_{budget}_{args.window_size}_{SUMMARY_COMPLEXTIY}_{args.mode}_{rotate_str}"
-    else:
-        PRECOMPUTED_DIR = f"{model_shortname}_{budget}_{args.window_size}_{SUMMARY_COMPLEXTIY}_epochs_{num_epochs}"
+            rotate_str = f'rotate_{args.target_rotation_position}'
+        PRECOMPUTED_DIR = f"{model_shortname}_{budget}_{args.window_size}_{SUMMARY_COMPLEXTIY}_{args.mode}_{rotate_str}_{args.data_limit}"
+    if num_epochs > 1:
+        PRECOMPUTED_DIR = f"{PRECOMPUTED_DIR}_{num_epochs}"
+    PRECOMPUTED_DIR += f"_stamp-{timestamp}"
+    if args.divide_method != "step_length":
+        PRECOMPUTED_DIR += f"_{args.divide_method}"
 
     # Check if cache already exists
     metadata_path = Path(os.path.join(PRECOMPUTED_DIR, "metadata.json"))
@@ -907,7 +1000,7 @@ if __name__ == "__main__":
             "compression": False,  # Keep False - we call compression explicitly
             "update_kv": True,
             "compression_content": "all",
-            "divide_method": 'step_length',  # Disable newline-triggered compression
+            "divide_method": args.divide_method,  # Disable newline-triggered compression
             "divide_length": 1000000,
         }
 
@@ -933,7 +1026,7 @@ if __name__ == "__main__":
                     f"###Solution:\n---\n{item['solution']}\n---\n"
                 )
             sample_len = len(TOKENIZER(sample).input_ids)
-            if sample_len > 20000:
+            if sample_len > 12000:
                 print(f"Sample {idx} is too long: {sample_len} tokens. Skipping.")
                 continue
 

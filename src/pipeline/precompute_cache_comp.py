@@ -684,13 +684,13 @@ def compute_dynamic_cache(documents: List[str], recompute: bool = False) -> Dict
         input_text, _ = apply_chat_template_notepad(
         input_text = past_context,
         model_name = HF_MODEL_ID,
-        append_instruction=True,
+        append_instruction=False,
     )
     elif args.mode == "takeaways":
         input_text, _ = apply_chat_template_takeaways(
             input_text = past_context,
             model_name = HF_MODEL_ID,
-            append_instruction=True,
+            append_instruction=False,
         )
     else:
         raise ValueError(f"Unsupported mode: {args.mode}")

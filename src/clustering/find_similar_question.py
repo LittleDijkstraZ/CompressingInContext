@@ -266,8 +266,8 @@ def main():
     """主函数：在代码中设置参数并执行搜索."""
     # ========== 配置参数 ==========
     # 在这里设置要查询的问题
-    query_question = "On $\\triangle ABC$ points $A,D,E$, and $B$ lie that order on side $\\overline{AB}$  with $AD=4, DE=16$, and $EB=8$. Points $A,F,G$, and $C$ lie in that order on side $\\overline{AC}$ with $AF=13, FG=52$, and $GC=26$. Let $M$ be the reflection of $D$ through $F$, and let $N$ be the reflection of $G$ through $E$. Quadrilateral $DEGF$ has area 288. Find the area of heptagon $AFNBCEM$."
-    
+    # query_question = "On $\\triangle ABC$ points $A,D,E$, and $B$ lie that order on side $\\overline{AB}$  with $AD=4, DE=16$, and $EB=8$. Points $A,F,G$, and $C$ lie in that order on side $\\overline{AC}$ with $AF=13, FG=52$, and $GC=26$. Let $M$ be the reflection of $D$ through $F$, and let $N$ be the reflection of $G$ through $E$. Quadrilateral $DEGF$ has area 288. Find the area of heptagon $AFNBCEM$."
+    query_question = "The $9$ members of a baseball team went to an ice-cream parlor after their game. Each player had a single scoop cone of chocolate, vanilla, or strawberry ice cream. At least one player chose each flavor, and the number of players who chose chocolate was greater than the number of players who chose vanilla, which was greater than the number of players who chose strawberry. Let $N$ be the number of different assignments of flavors to players that meet these conditions. Find the remainder when $N$ is divided by $1000.$"
     # 设置返回最相似问题的数量
     top_k = 20
     
@@ -275,7 +275,7 @@ def main():
     use_faiss = False
     
     # 输出JSON文件路径
-    output_json_path = "similar_questions_result.json"
+    output_json_path = "similar_questions_result_aime25_3.json"
     # ==============================
     
     print(f"\n{'='*80}")

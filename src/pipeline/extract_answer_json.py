@@ -147,7 +147,24 @@ def main():
     """
     Main function to process all result files in the results directory.
     """
-    results_dir = Path("results")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--input_dir",
+        type=str,
+        default="results/results_.",
+        help="Directory containing the results JSON files",
+    )
+    parser.add_argument(
+        "--correct_answer",
+        type=str,
+        default="588",
+        help="Correct answer to look for",
+    )
+    args = parser.parse_args()
+
+
+    results_dir = Path(args.input_dir)
 
     if not results_dir.exists():
         print(f"Error: Results directory '{results_dir}' not found!")
@@ -162,7 +179,7 @@ def main():
     print(f"Found {len(json_files)} JSON files to process\n")
     print("=" * 80)
 
-    all_results = [process_results_file(json_file) for json_file in json_files]
+    all_results = [process_results_file(json_file, correct_answer=args.correct_answer) for json_file in json_files]
 
     # Sort results by pass@k descending
     all_results.sort(key=lambda r: r.get("pass_at_k", 0.0), reverse=True)
@@ -196,7 +213,7 @@ def main():
                 )
         print("-" * 80)
 
-    output_file = "extracted_answers_passk_new.csv"
+    output_file = f"{results_dir}/extracted_answers_passk.csv"
     with open(output_file, "w", encoding="utf-8") as f:
         f.write("filename,k_used,pass_at_k,correct_count,total_tryouts,boxed_count\n")
         for result in all_results:
