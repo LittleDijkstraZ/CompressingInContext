@@ -31,6 +31,7 @@ def get_config_stem(
     summary_complexity: str,
     mode: str,
     rotate: bool,
+    target_rotation_position: int,
     data_limit: int,
     num_epochs: int,
 ) -> str:
@@ -38,7 +39,7 @@ def get_config_stem(
     Build the config stem (without timestamp) for a given configuration.
     This matches the naming convention in run_precomputation.
     """
-    rotate_str = "rotate_" if rotate else ""
+    rotate_str = str(target_rotation_position) if rotate else "0"
     stem = f"{model_shortName}_{budget}_{window_size}_{summary_complexity}_{mode}_{rotate_str}_{data_limit}"
     if num_epochs > 1:
         stem += f"_{num_epochs}"
@@ -55,7 +56,6 @@ def collect_existing_config_stems(results_dir: Optional[Path]) -> Set[str]:
         return existing_stems
 
     # Pattern to match eval files and extract the stem before _stamp-
-    # e.g., eval_DS7B_256_128_complex_takeaways_rotate__1_stamp-20251210_024217.json
     stamp_pattern = re.compile(r'^eval_(.+)_stamp-\d{8}_\d{6}\.json$')
 
     for file_path in results_dir.glob("eval_*.json"):
@@ -159,7 +159,7 @@ def run_precomputation(
     script_dir = Path(__file__).parent
     project_root = script_dir.parent.parent
 
-    rotate_str = "rotate_" if rotate else ""
+    rotate_str = str(target_rotation_position) if rotate else "0"
 
     model_shortname_dict = {
         "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "DS7B",
@@ -303,6 +303,7 @@ def run_grid_search(
                                     summary_complexity=summary_complexity,
                                     mode=mode,
                                     rotate=rotate,
+                                    target_rotation_position=target_pos,
                                     data_limit=data_limit,
                                     num_epochs=num_epochs,
                                 )
